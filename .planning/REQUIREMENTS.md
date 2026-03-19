@@ -33,7 +33,7 @@
 
 ### Hosting
 
-- [ ] **HOST-01**: The app targets .NET 8 if available, otherwise the latest stable ASP.NET Core Web API
+- [x] **HOST-01**: The app targets .NET 8 if available, otherwise the latest stable ASP.NET Core Web API
 - [ ] **HOST-02**: The app binds to the `PORT` environment variable when present so it runs on Render
 - [ ] **HOST-03**: The service remains stateless except for the in-memory latest live race state
 - [ ] **HOST-04**: The repository includes a README with local run steps and Render deployment notes
@@ -82,7 +82,7 @@
 | UI-04 | Phase 4 | Pending |
 | UI-05 | Phase 4 | Pending |
 | CFG-01 | Phase 2 | Pending |
-| HOST-01 | Phase 1 | Pending |
+| HOST-01 | Phase 1 | Complete |
 | HOST-02 | Phase 1 | Pending |
 | HOST-03 | Phase 1 | Pending |
 | HOST-04 | Phase 5 | Pending |
