@@ -15,9 +15,9 @@
 
 ### Data
 
-- [ ] **DATA-01**: The project defines a clear `LiveRaceState` model for the live event state
-- [ ] **DATA-02**: The project defines a clear `LiveMatch` model for current match entries
-- [ ] **DATA-03**: `LiveRaceState` includes event name, event date, current round, next-up race, and current match list
+- [x] **DATA-01**: The project defines a clear `LiveRaceState` model for the live event state
+- [x] **DATA-02**: The project defines a clear `LiveMatch` model for current match entries
+- [x] **DATA-03**: `LiveRaceState` includes event name, event date, current round, next-up race, and current match list
 
 ### UI
 
@@ -34,8 +34,8 @@
 ### Hosting
 
 - [x] **HOST-01**: The app targets .NET 8 if available, otherwise the latest stable ASP.NET Core Web API
-- [ ] **HOST-02**: The app binds to the `PORT` environment variable when present so it runs on Render
-- [ ] **HOST-03**: The service remains stateless except for the in-memory latest live race state
+- [x] **HOST-02**: The app binds to the `PORT` environment variable when present so it runs on Render
+- [x] **HOST-03**: The service remains stateless except for the in-memory latest live race state
 - [ ] **HOST-04**: The repository includes a README with local run steps and Render deployment notes
 
 ## v2 Requirements
@@ -73,9 +73,9 @@
 | API-03 | Phase 2 | Pending |
 | API-04 | Phase 3 | Pending |
 | API-05 | Phase 1 | Pending |
-| DATA-01 | Phase 1 | Pending |
-| DATA-02 | Phase 1 | Pending |
-| DATA-03 | Phase 1 | Pending |
+| DATA-01 | Phase 1 | Complete |
+| DATA-02 | Phase 1 | Complete |
+| DATA-03 | Phase 1 | Complete |
 | UI-01 | Phase 4 | Pending |
 | UI-02 | Phase 4 | Pending |
 | UI-03 | Phase 4 | Pending |
@@ -83,8 +83,8 @@
 | UI-05 | Phase 4 | Pending |
 | CFG-01 | Phase 2 | Pending |
 | HOST-01 | Phase 1 | Complete |
-| HOST-02 | Phase 1 | Pending |
-| HOST-03 | Phase 1 | Pending |
+| HOST-02 | Phase 1 | Complete |
+| HOST-03 | Phase 1 | Complete |
 | HOST-04 | Phase 5 | Pending |
 
 **Coverage:**

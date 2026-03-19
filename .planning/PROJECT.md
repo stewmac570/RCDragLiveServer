@@ -12,7 +12,9 @@ Anyone at the track can reliably open a fast, simple phone-friendly page and see
 
 ### Validated
 
-(None yet - ship to validate)
+- [x] ASP.NET Core Web API baseline created on .NET 8 (validated in Phase 1: Foundation and Contracts)
+- [x] Core live payload contracts defined (`LiveRaceState`, `LiveMatch`) with v1-required fields (validated in Phase 1: Foundation and Contracts)
+- [x] Render `PORT` host binding and in-memory latest-state store baseline implemented (validated in Phase 1: Foundation and Contracts)
 
 ### Active
 
@@ -50,10 +52,10 @@ Anyone at the track can reliably open a fast, simple phone-friendly page and see
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Keep homepage server-rendered inside the API project | Minimizes moving parts and speeds up delivery for v1 | - Pending |
-| Store only the latest event state in memory | Current need is live display, not historical replay, and this keeps the service simple | - Pending |
+| Keep homepage server-rendered inside the API project | Minimizes moving parts and speeds up delivery for v1 | Confirmed (Phase 1 baseline aligns with this direction) |
+| Store only the latest event state in memory | Current need is live display, not historical replay, and this keeps the service simple | Confirmed (`ILiveRaceStateStore` + `InMemoryLiveRaceStateStore`) |
 | Prioritize reliable low-friction viewing over richer detail | The main v1 success case is quick mobile visibility at the track | - Pending |
 | Use RC Drag Manager as the update publisher | The user's existing race control app already owns the live race data | - Pending |
 
 ---
-*Last updated: 2026-03-19 after initialization*
+*Last updated: 2026-03-20 after Phase 1 execution*
