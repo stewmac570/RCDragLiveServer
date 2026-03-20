@@ -11,6 +11,11 @@ namespace RCDragLiveServer.Controllers;
 [RequireApiKey]
 public sealed class LiveUpdateController(ILiveRaceStateStore stateStore) : ControllerBase
 {
+    private static readonly JsonSerializerOptions DeserializeOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     [HttpPost]
     public async Task<IActionResult> Post()
     {
@@ -45,7 +50,7 @@ public sealed class LiveUpdateController(ILiveRaceStateStore stateStore) : Contr
             LiveRaceState? payload;
             try
             {
-                payload = parsedPayload.RootElement.Deserialize<LiveRaceState>();
+                payload = parsedPayload.RootElement.Deserialize<LiveRaceState>(DeserializeOptions);
             }
             catch (JsonException)
             {
