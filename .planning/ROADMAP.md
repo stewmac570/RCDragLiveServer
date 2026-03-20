@@ -55,8 +55,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 03-01: Add the public live data endpoint
-- [ ] 03-02: Add the health endpoint and confirm public behavior
+- [ ] 03-01-PLAN.md — Add the public live data endpoint and no-cache response behavior
+- [ ] 03-02-PLAN.md — Add the health endpoint and end-to-end public smoke verification
 
 ### Phase 4: Public Mobile Live Page
 **Goal**: Deliver a simple, reliable, phone-friendly homepage that shows the current live race summary.
