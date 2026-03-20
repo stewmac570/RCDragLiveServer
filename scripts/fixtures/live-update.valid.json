@@ -1,0 +1,16 @@
+{
+  "eventName": "Friday Night Shootout",
+  "eventDate": "2026-03-20",
+  "currentRound": "Round 3",
+  "nextUp": "Lane 1: Alice vs Bob",
+  "matches": [
+    {
+      "driver1": "Alice",
+      "driver2": "Bob"
+    },
+    {
+      "driver1": "Carol",
+      "driver2": "Dan"
+    }
+  ]
+}
