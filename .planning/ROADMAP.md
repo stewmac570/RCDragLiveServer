@@ -7,7 +7,7 @@ This roadmap builds RCDragLiveServer from a minimal deployable ASP.NET Core serv
 ## Phases
 
 - [x] **Phase 1: Foundation and Contracts** - Create the ASP.NET Core service baseline, hosting setup, and core live race models (completed 2026-03-19)
-- [ ] **Phase 2: Secure Live Update Ingestion** - Add the protected update API, API key configuration, and in-memory latest state storage
+- [x] **Phase 2: Secure Live Update Ingestion** - Add the protected update API, API key configuration, and in-memory latest state storage (completed 2026-03-20)
 - [ ] **Phase 3: Public Live Data Access** - Expose the latest live state publicly through JSON and health endpoints
 - [ ] **Phase 4: Public Mobile Live Page** - Deliver the simple server-rendered homepage for spectators
 - [ ] **Phase 5: Production Readiness and Documentation** - Add README guidance and final deployment-facing cleanup
@@ -92,7 +92,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation and Contracts | 3/3 | Complete   | 2026-03-19 |
-| 2. Secure Live Update Ingestion | 2/3 | In Progress|  |
+| 2. Secure Live Update Ingestion | 3/3 | Complete    | 2026-03-20 |
 | 3. Public Live Data Access | 0/2 | Not started | - |
 | 4. Public Mobile Live Page | 0/3 | Not started | - |
 | 5. Production Readiness and Documentation | 0/2 | Not started | - |

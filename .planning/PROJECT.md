@@ -15,10 +15,10 @@ Anyone at the track can reliably open a fast, simple phone-friendly page and see
 - [x] ASP.NET Core Web API baseline created on .NET 8 (validated in Phase 1: Foundation and Contracts)
 - [x] Core live payload contracts defined (`LiveRaceState`, `LiveMatch`) with v1-required fields (validated in Phase 1: Foundation and Contracts)
 - [x] Render `PORT` host binding and in-memory latest-state store baseline implemented (validated in Phase 1: Foundation and Contracts)
+- [x] Protected live update ingestion implemented with `POST /api/update` + `X-API-KEY` validation and latest-state replacement (validated in Phase 2: Secure Live Update Ingestion)
 
 ### Active
 
-- [ ] Receive live race state updates from RC Drag Manager through a protected API endpoint
 - [ ] Expose the latest live race state publicly as JSON
 - [ ] Show a simple public live race page optimized for reliable mobile viewing
 - [ ] Run cleanly as a Render-hosted public web service
@@ -54,8 +54,9 @@ Anyone at the track can reliably open a fast, simple phone-friendly page and see
 |----------|-----------|---------|
 | Keep homepage server-rendered inside the API project | Minimizes moving parts and speeds up delivery for v1 | Confirmed (Phase 1 baseline aligns with this direction) |
 | Store only the latest event state in memory | Current need is live display, not historical replay, and this keeps the service simple | Confirmed (`ILiveRaceStateStore` + `InMemoryLiveRaceStateStore`) |
+| Use API key protected update ingestion | Prevents unauthenticated public writes to live race state | Confirmed (`POST /api/update` guarded by `X-API-KEY`) |
 | Prioritize reliable low-friction viewing over richer detail | The main v1 success case is quick mobile visibility at the track | - Pending |
 | Use RC Drag Manager as the update publisher | The user's existing race control app already owns the live race data | - Pending |
 
 ---
-*Last updated: 2026-03-20 after Phase 1 execution*
+*Last updated: 2026-03-20 after Phase 2 execution*
