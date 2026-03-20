@@ -10,7 +10,7 @@
 - [x] **API-01**: RC Drag Manager can `POST /api/update` with a JSON payload representing the current live race state
 - [x] **API-02**: `POST /api/update` rejects requests that do not include a valid `X-API-KEY` header
 - [x] **API-03**: The service stores only the latest live race state in memory
-- [ ] **API-04**: Anyone can `GET /api/live` and receive the latest live race state as JSON
+- [x] **API-04**: Anyone can `GET /api/live` and receive the latest live race state as JSON
 - [ ] **API-05**: `GET /health` returns a healthy response suitable for Render health checks
 
 ### Data
@@ -71,7 +71,7 @@
 | API-01 | Phase 2 | Complete |
 | API-02 | Phase 2 | Complete |
 | API-03 | Phase 2 | Complete |
-| API-04 | Phase 3 | Pending |
+| API-04 | Phase 3 | Complete |
 | API-05 | Phase 1 | Pending |
 | DATA-01 | Phase 1 | Complete |
 | DATA-02 | Phase 1 | Complete |
