@@ -2,6 +2,12 @@ using RCDragLiveServer.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+var apiKey = builder.Configuration["ApiKey"]?.Trim();
+if (string.IsNullOrWhiteSpace(apiKey))
+{
+    throw new InvalidOperationException("Configuration key 'ApiKey' is required.");
+}
+
 var portValue = Environment.GetEnvironmentVariable("PORT");
 if (!string.IsNullOrWhiteSpace(portValue) && int.TryParse(portValue, out var port))
 {
