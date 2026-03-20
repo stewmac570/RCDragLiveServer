@@ -21,6 +21,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\\..\\src\\RCDragLiveServer\\RCDragLiveServer.csproj" />
   </ItemGroup>
 </Project>
