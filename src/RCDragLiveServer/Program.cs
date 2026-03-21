@@ -5,10 +5,25 @@ using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
+string apiKeySource = "unknown";
+if (builder.Configuration is IConfigurationRoot configurationRoot)
+{
+    foreach (IConfigurationProvider provider in configurationRoot.Providers.Reverse())
+    {
+        if (provider.TryGet("ApiKey", out var providerValue))
+        {
+            apiKeySource = provider.ToString() ?? provider.GetType().Name;
+            break;
+        }
+    }
+}
+
 var apiKey = builder.Configuration["ApiKey"]?.Trim();
+Console.WriteLine("[AUTH] ApiKey config loaded: present=" + (!string.IsNullOrWhiteSpace(apiKey)) + ", length=" + (apiKey?.Length ?? 0) + ", source=" + apiKeySource);
 if (string.IsNullOrWhiteSpace(apiKey))
 {
-    throw new InvalidOperationException("Configuration key 'ApiKey' is required.");
+    throw new InvalidOperationException(
+        "Configuration key 'ApiKey' is required. Configure it via launchSettings environmentVariables, appsettings.Development.json, appsettings.json, or environment variables.");
 }
 
 var portValue = Environment.GetEnvironmentVariable("PORT");
