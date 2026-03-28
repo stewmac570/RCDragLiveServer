@@ -4,7 +4,11 @@ public class LiveRaceState
 {
     public string EventName { get; set; } = string.Empty;
     public string EventDate { get; set; } = string.Empty;
+    public string ClassType { get; set; } = string.Empty;
+    public string RaceType { get; set; } = string.Empty;
     public string CurrentRound { get; set; } = string.Empty;
     public string NextUp { get; set; } = string.Empty;
+    public string? RRStandings { get; set; }
     public List<LiveMatch> Matches { get; set; } = new();
+    public List<LiveWinner> Winners { get; set; } = new();
 }
