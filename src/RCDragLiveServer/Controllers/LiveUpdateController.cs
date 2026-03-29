@@ -62,7 +62,7 @@ public sealed class LiveUpdateController(ILiveRaceStateStore stateStore) : Contr
                 return BadRequest(new { error = "invalid_payload" });
             }
 
-            stateStore.SetLatest(payload);
+            stateStore.Upsert(payload);
         }
 
         return Ok(new { status = "updated" });

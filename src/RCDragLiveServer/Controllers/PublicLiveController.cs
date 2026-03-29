@@ -20,11 +20,11 @@ public sealed class PublicLiveController : ControllerBase
     [HttpGet("")]
     public ContentResult Home()
     {
-        LiveRaceState state = stateStore.GetLatest();
+        Dictionary<string, LiveRaceState> classes = stateStore.GetAll();
 
         ApplyNoCacheHeaders();
 
-        string html = BuildHomePage(state);
+        string html = BuildHomePage(classes);
 
         return Content(html, "text/html; charset=utf-8");
     }
@@ -52,108 +52,32 @@ public sealed class PublicLiveController : ControllerBase
         Response.Headers.Expires = "0";
     }
 
-    private static string BuildHomePage(LiveRaceState state)
+    private static string BuildHomePage(Dictionary<string, LiveRaceState> classes)
     {
-        bool hasAnyData =
-            !string.IsNullOrWhiteSpace(state.EventName) ||
-            !string.IsNullOrWhiteSpace(state.EventDate) ||
-            !string.IsNullOrWhiteSpace(state.CurrentRound) ||
-            !string.IsNullOrWhiteSpace(state.NextUp) ||
-            state.Matches.Count > 0;
-
-        string eventName = Html(state.EventName);
-        string eventDate = Html(state.EventDate);
-        string classType = Html(state.ClassType);
-        string raceType = Html(state.RaceType);
-        string nextUp = Html(state.NextUp);
-
-        // --- Next Up section ---
-        string nextUpHtml = string.IsNullOrWhiteSpace(nextUp)
-            ? "<div class=\"empty-box\">Waiting for next match up...</div>"
-            : $"<div class=\"next-up-drivers\">{nextUp}</div>";
-
-        // --- Full Bracket section ---
-        StringBuilder bracketHtml = new StringBuilder();
-        if (state.Matches.Count == 0)
+        if (classes.Count == 0)
         {
-            bracketHtml.AppendLine("<div class=\"empty-box\">No bracket data available yet.</div>");
-        }
-        else
-        {
-            var rounds = state.Matches
-                .GroupBy(m => m.RoundLabel)
-                .OrderBy(g => g.Key);
-
-            foreach (var round in rounds)
-            {
-                string roundLabel = Html(round.Key);
-                bracketHtml.AppendLine($"  <div class=\"round-header\">{(string.IsNullOrWhiteSpace(roundLabel) ? "Round" : roundLabel)}</div>");
-                bracketHtml.AppendLine("  <div class=\"match-list\">");
-
-                foreach (LiveMatch match in round)
-                {
-                    string driver1 = Html(match.Driver1);
-                    string driver2 = Html(match.Driver2);
-                    bool resolved = !string.IsNullOrWhiteSpace(match.WinnerName);
-
-                    bracketHtml.AppendLine("    <div class=\"match-card\">");
-
-                    if (resolved)
-                    {
-                        string winner = Html(match.WinnerName);
-                        string loser = match.WinnerName == match.Driver1 ? driver2 : driver1;
-                        bracketHtml.AppendLine($"      <div class=\"driver winner\">{winner} <span class=\"win-badge\">WIN</span></div>");
-                        bracketHtml.AppendLine($"      <div class=\"driver loser\">{loser}</div>");
-                    }
-                    else
-                    {
-                        bracketHtml.AppendLine($"      <div class=\"driver driver1\">{driver1}</div>");
-                        bracketHtml.AppendLine("      <div class=\"vs\">vs</div>");
-                        bracketHtml.AppendLine($"      <div class=\"driver driver2\">{driver2}</div>");
-                    }
-
-                    bracketHtml.AppendLine("    </div>");
-                }
-
-                bracketHtml.AppendLine("  </div>");
-            }
+            return BuildNoEventPage();
         }
 
-        // --- Winners List section ---
-        string winnersHtml;
-        if (state.Winners.Count == 0)
+        var sortedKeys = classes.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
+
+        StringBuilder tabButtons = new StringBuilder();
+        StringBuilder tabPanels = new StringBuilder();
+
+        for (int i = 0; i < sortedKeys.Count; i++)
         {
-            winnersHtml = "<div class=\"empty-box\">No winners recorded yet.</div>";
-        }
-        else
-        {
-            StringBuilder wb = new StringBuilder();
-            wb.AppendLine("<table class=\"winners-table\">");
-            wb.AppendLine("  <thead><tr><th>Round</th><th>Winner</th><th>Loser</th></tr></thead>");
-            wb.AppendLine("  <tbody>");
-            foreach (LiveWinner w in state.Winners)
-            {
-                wb.AppendLine($"    <tr><td>{Html(w.RoundLabel)}</td><td class=\"winner-cell\">{Html(w.WinnerName)}</td><td class=\"loser-cell\">{Html(w.LoserName)}</td></tr>");
-            }
-            wb.AppendLine("  </tbody>");
-            wb.AppendLine("</table>");
-            winnersHtml = wb.ToString();
+            string key = sortedKeys[i];
+            LiveRaceState state = classes[key];
+            string safeKey = Html(key);
+            string tabId = $"tab-{WebUtility.UrlEncode(key)}";
+
+            tabButtons.AppendLine($"  <button class=\"tab-btn\" data-tab=\"{safeKey}\" data-panel=\"{tabId}\">{safeKey}</button>");
+            tabPanels.AppendLine($"<div id=\"{tabId}\" class=\"tab-panel\">");
+            tabPanels.Append(BuildClassPanel(state));
+            tabPanels.AppendLine("</div>");
         }
 
-        // --- RR Standings section ---
-        string rrHtml = string.IsNullOrWhiteSpace(state.RRStandings)
-            ? string.Empty
-            : $"""
-            <h2 class="section-title">Round Robin Standings</h2>
-            <pre class="rr-standings">{Html(state.RRStandings)}</pre>
-            """;
-
-        string emptyStateHtml = hasAnyData
-            ? string.Empty
-            : "<div class=\"empty-state\">No live race data available yet.</div>";
-
-        string classTypeBadge = string.IsNullOrWhiteSpace(classType) ? string.Empty : $"<span class=\"badge\">{classType}</span>";
-        string raceTypeBadge = string.IsNullOrWhiteSpace(raceType) ? string.Empty : $"<span class=\"badge badge-race\">{raceType}</span>";
+        string firstTabName = Html(sortedKeys[0]);
 
         return $$"""
 <!DOCTYPE html>
@@ -162,7 +86,6 @@ public sealed class PublicLiveController : ControllerBase
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>RC Drag Live</title>
-    <meta http-equiv="refresh" content="5" />
     <style>
         * {
             box-sizing: border-box;
@@ -222,6 +145,47 @@ public sealed class PublicLiveController : ControllerBase
         .badge-race {
             background: #7c3aed;
             color: #ede9fe;
+        }
+
+        /* ---- Tabs ---- */
+        .tab-strip {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+        }
+
+        .tab-btn {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 999px;
+            color: #94a3b8;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 700;
+            padding: 6px 18px;
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+        }
+
+        .tab-btn:hover {
+            background: #263348;
+            color: #e2e8f0;
+        }
+
+        .tab-btn.active {
+            background: #1d4ed8;
+            border-color: #1d4ed8;
+            color: #fff;
+        }
+
+        .tab-panel {
+            display: none;
+        }
+
+        .tab-panel.active {
+            display: block;
         }
 
         /* ---- Section chrome ---- */
@@ -400,37 +364,227 @@ public sealed class PublicLiveController : ControllerBase
 <body>
     <div class="wrap">
 
+        <!-- Tab Strip -->
+        <div class="tab-strip">
+{{tabButtons}}        </div>
+
+        <!-- Tab Panels -->
+{{tabPanels}}
+        <div class="footer">Auto-refreshes every 5 seconds</div>
+    </div>
+    <script>
+        (function () {
+            var STORAGE_KEY = 'rcDragActiveTab';
+            var buttons = Array.from(document.querySelectorAll('.tab-btn'));
+            var panels = Array.from(document.querySelectorAll('.tab-panel'));
+
+            function activate(tabName) {
+                buttons.forEach(function (b) {
+                    b.classList.toggle('active', b.dataset.tab === tabName);
+                });
+                panels.forEach(function (p) {
+                    var btn = buttons.find(function (b) { return b.dataset.panel === p.id; });
+                    p.classList.toggle('active', btn ? btn.dataset.tab === tabName : false);
+                });
+                sessionStorage.setItem(STORAGE_KEY, tabName);
+            }
+
+            buttons.forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    activate(btn.dataset.tab);
+                });
+            });
+
+            // Restore saved tab or default to first
+            var saved = sessionStorage.getItem(STORAGE_KEY);
+            var initial = (saved && buttons.some(function (b) { return b.dataset.tab === saved; }))
+                ? saved
+                : '{{firstTabName}}';
+            activate(initial);
+
+            // Auto-refresh preserving active tab
+            setTimeout(function () { location.reload(); }, 5000);
+        })();
+    </script>
+</body>
+</html>
+""";
+    }
+
+    private static string BuildNoEventPage()
+    {
+        return """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RC Drag Live</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: Arial, Helvetica, sans-serif;
+            background: #0a0f1a;
+            color: #f1f5f9;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        .no-event {
+            background: #1e293b;
+            border: 1px dashed #475569;
+            border-radius: 16px;
+            padding: 40px 48px;
+            text-align: center;
+            max-width: 400px;
+        }
+        .no-event h1 {
+            font-size: 24px;
+            font-weight: 900;
+            margin: 0 0 10px 0;
+            color: #f8fafc;
+        }
+        .no-event p {
+            color: #94a3b8;
+            margin: 0;
+            font-size: 15px;
+        }
+        .footer {
+            margin-top: 24px;
+            color: #475569;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="no-event">
+        <h1>No Active Event</h1>
+        <p>Waiting for race data to arrive.</p>
+        <div class="footer">Auto-refreshes every 5 seconds</div>
+    </div>
+    <script>
+        setTimeout(function () { location.reload(); }, 5000);
+    </script>
+</body>
+</html>
+""";
+    }
+
+    private static string BuildClassPanel(LiveRaceState state)
+    {
+        string eventName = Html(state.EventName);
+        string eventDate = Html(state.EventDate);
+        string classType = Html(state.ClassType);
+        string raceType = Html(state.RaceType);
+        string nextUp = Html(state.NextUp);
+
+        string nextUpHtml = string.IsNullOrWhiteSpace(nextUp)
+            ? "<div class=\"empty-box\">Waiting for next match up...</div>"
+            : $"<div class=\"next-up-drivers\">{nextUp}</div>";
+
+        StringBuilder bracketHtml = new StringBuilder();
+        if (state.Matches.Count == 0)
+        {
+            bracketHtml.AppendLine("<div class=\"empty-box\">No bracket data available yet.</div>");
+        }
+        else
+        {
+            var rounds = state.Matches
+                .GroupBy(m => m.RoundLabel)
+                .OrderBy(g => g.Key);
+
+            foreach (var round in rounds)
+            {
+                string roundLabel = Html(round.Key);
+                bracketHtml.AppendLine($"  <div class=\"round-header\">{(string.IsNullOrWhiteSpace(roundLabel) ? "Round" : roundLabel)}</div>");
+                bracketHtml.AppendLine("  <div class=\"match-list\">");
+
+                foreach (LiveMatch match in round)
+                {
+                    string driver1 = Html(match.Driver1);
+                    string driver2 = Html(match.Driver2);
+                    bool resolved = !string.IsNullOrWhiteSpace(match.WinnerName);
+
+                    bracketHtml.AppendLine("    <div class=\"match-card\">");
+
+                    if (resolved)
+                    {
+                        string winner = Html(match.WinnerName);
+                        string loser = match.WinnerName == match.Driver1 ? driver2 : driver1;
+                        bracketHtml.AppendLine($"      <div class=\"driver winner\">{winner} <span class=\"win-badge\">WIN</span></div>");
+                        bracketHtml.AppendLine($"      <div class=\"driver loser\">{loser}</div>");
+                    }
+                    else
+                    {
+                        bracketHtml.AppendLine($"      <div class=\"driver driver1\">{driver1}</div>");
+                        bracketHtml.AppendLine("      <div class=\"vs\">vs</div>");
+                        bracketHtml.AppendLine($"      <div class=\"driver driver2\">{driver2}</div>");
+                    }
+
+                    bracketHtml.AppendLine("    </div>");
+                }
+
+                bracketHtml.AppendLine("  </div>");
+            }
+        }
+
+        string winnersHtml;
+        if (state.Winners.Count == 0)
+        {
+            winnersHtml = "<div class=\"empty-box\">No winners recorded yet.</div>";
+        }
+        else
+        {
+            StringBuilder wb = new StringBuilder();
+            wb.AppendLine("<table class=\"winners-table\">");
+            wb.AppendLine("  <thead><tr><th>Round</th><th>Winner</th><th>Loser</th></tr></thead>");
+            wb.AppendLine("  <tbody>");
+            foreach (LiveWinner w in state.Winners)
+            {
+                wb.AppendLine($"    <tr><td>{Html(w.RoundLabel)}</td><td class=\"winner-cell\">{Html(w.WinnerName)}</td><td class=\"loser-cell\">{Html(w.LoserName)}</td></tr>");
+            }
+            wb.AppendLine("  </tbody>");
+            wb.AppendLine("</table>");
+            winnersHtml = wb.ToString();
+        }
+
+        string rrHtml = string.IsNullOrWhiteSpace(state.RRStandings)
+            ? string.Empty
+            : $"""
+
+            <h2 class="section-title">Round Robin Standings</h2>
+            <pre class="rr-standings">{Html(state.RRStandings)}</pre>
+            """;
+
+        string classTypeBadge = string.IsNullOrWhiteSpace(classType) ? string.Empty : $"<span class=\"badge\">{classType}</span>";
+        string raceTypeBadge = string.IsNullOrWhiteSpace(raceType) ? string.Empty : $"<span class=\"badge badge-race\">{raceType}</span>";
+
+        return $"""
         <!-- Event Header -->
         <div class="hero">
-            <h1 class="title">{{(string.IsNullOrWhiteSpace(eventName) ? "RC Drag Live" : eventName)}}</h1>
-            <p class="event-meta">{{(string.IsNullOrWhiteSpace(eventDate) ? "Waiting for event date" : eventDate)}}</p>
-            {{classTypeBadge}}{{raceTypeBadge}}
+            <h1 class="title">{(string.IsNullOrWhiteSpace(eventName) ? "RC Drag Live" : eventName)}</h1>
+            <p class="event-meta">{(string.IsNullOrWhiteSpace(eventDate) ? "Waiting for event date" : eventDate)}</p>
+            {classTypeBadge}{raceTypeBadge}
         </div>
-
-        {{emptyStateHtml}}
 
         <!-- Next Up -->
         <h2 class="section-title">Next Up</h2>
         <div class="panel">
-            {{nextUpHtml}}
+            {nextUpHtml}
         </div>
 
         <!-- Full Bracket -->
         <h2 class="section-title">Full Bracket</h2>
-        {{bracketHtml}}
-
+        {bracketHtml}
         <!-- Winners List -->
         <h2 class="section-title">Winners</h2>
         <div class="panel">
-            {{winnersHtml}}
+            {winnersHtml}
         </div>
-
-        {{rrHtml}}
-
-        <div class="footer">Auto-refreshes every 5 seconds</div>
-    </div>
-</body>
-</html>
+        {rrHtml}
 """;
     }
 
