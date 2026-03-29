@@ -5,5 +5,6 @@ namespace RCDragLiveServer.Services;
 public interface ILiveRaceStateStore
 {
     LiveRaceState GetLatest();
-    void SetLatest(LiveRaceState state);
+    Dictionary<string, LiveRaceState> GetAll();
+    void Upsert(LiveRaceState state);
 }
