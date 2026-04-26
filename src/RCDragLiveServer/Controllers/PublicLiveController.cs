@@ -30,11 +30,11 @@ public sealed class PublicLiveController : ControllerBase
     }
 
     [HttpGet("api/live")]
-    public ActionResult<LiveRaceState> GetLive()
+    public ActionResult<IEnumerable<LiveRaceState>> GetLive()
     {
         ApplyNoCacheHeaders();
 
-        return Ok(stateStore.GetLatest());
+        return Ok(stateStore.GetAll().Values.ToList());
     }
 
     [HttpGet("health")]
