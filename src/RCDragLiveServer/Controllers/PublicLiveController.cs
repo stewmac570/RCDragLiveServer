@@ -30,11 +30,11 @@ public sealed class PublicLiveController : ControllerBase
     }
 
     [HttpGet("api/live")]
-    public ActionResult<LiveRaceState> GetLive()
+    public ActionResult<IEnumerable<LiveRaceState>> GetLive()
     {
         ApplyNoCacheHeaders();
 
-        return Ok(stateStore.GetLatest());
+        return Ok(stateStore.GetAll().Values.ToList());
     }
 
     [HttpGet("health")]
@@ -60,24 +60,28 @@ public sealed class PublicLiveController : ControllerBase
         }
 
         var sortedKeys = classes.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
+        bool multiClass = sortedKeys.Count > 1;
 
-        StringBuilder tabButtons = new StringBuilder();
-        StringBuilder tabPanels = new StringBuilder();
+        StringBuilder sections = new StringBuilder();
 
         for (int i = 0; i < sortedKeys.Count; i++)
         {
             string key = sortedKeys[i];
             LiveRaceState state = classes[key];
-            string safeKey = Html(key);
-            string tabId = $"tab-{WebUtility.UrlEncode(key)}";
 
-            tabButtons.AppendLine($"  <button class=\"tab-btn\" data-tab=\"{safeKey}\" data-panel=\"{tabId}\">{safeKey}</button>");
-            tabPanels.AppendLine($"<div id=\"{tabId}\" class=\"tab-panel\">");
-            tabPanels.Append(BuildClassPanel(state));
-            tabPanels.AppendLine("</div>");
+            sections.AppendLine("<section class=\"class-section\">");
+            if (multiClass)
+            {
+                sections.AppendLine($"<h2 class=\"class-heading\">{Html(key)}</h2>");
+            }
+            sections.Append(BuildClassPanel(state));
+            sections.AppendLine("</section>");
+
+            if (multiClass && i < sortedKeys.Count - 1)
+            {
+                sections.AppendLine("<div class=\"class-divider\"></div>");
+            }
         }
-
-        string firstTabName = Html(sortedKeys[0]);
 
         return $$"""
 <!DOCTYPE html>
@@ -147,45 +151,28 @@ public sealed class PublicLiveController : ControllerBase
             color: #ede9fe;
         }
 
-        /* ---- Tabs ---- */
-        .tab-strip {
-            display: flex;
-            gap: 6px;
-            flex-wrap: wrap;
-            margin-bottom: 16px;
+        /* ---- Class Sections ---- */
+        .class-section {
+            margin-bottom: 8px;
         }
 
-        .tab-btn {
+        .class-heading {
+            font-size: 24px;
+            font-weight: 900;
+            color: #f8fafc;
+            margin: 0 0 16px 0;
+            padding: 12px 20px;
             background: #1e293b;
             border: 1px solid #334155;
-            border-radius: 999px;
-            color: #94a3b8;
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: 700;
-            padding: 6px 18px;
+            border-radius: 12px;
             text-transform: uppercase;
-            letter-spacing: 0.07em;
-            transition: background 0.15s, color 0.15s, border-color 0.15s;
+            letter-spacing: 0.06em;
         }
 
-        .tab-btn:hover {
-            background: #263348;
-            color: #e2e8f0;
-        }
-
-        .tab-btn.active {
-            background: #1d4ed8;
-            border-color: #1d4ed8;
-            color: #fff;
-        }
-
-        .tab-panel {
-            display: none;
-        }
-
-        .tab-panel.active {
-            display: block;
+        .class-divider {
+            border: none;
+            border-top: 2px solid #334155;
+            margin: 32px 0;
         }
 
         /* ---- Section chrome ---- */
@@ -364,47 +351,12 @@ public sealed class PublicLiveController : ControllerBase
 <body>
     <div class="wrap">
 
-        <!-- Tab Strip -->
-        <div class="tab-strip">
-{{tabButtons}}        </div>
-
-        <!-- Tab Panels -->
-{{tabPanels}}
+        <!-- Class Sections -->
+{{sections}}
         <div class="footer">Auto-refreshes every 5 seconds</div>
     </div>
     <script>
-        (function () {
-            var STORAGE_KEY = 'rcDragActiveTab';
-            var buttons = Array.from(document.querySelectorAll('.tab-btn'));
-            var panels = Array.from(document.querySelectorAll('.tab-panel'));
-
-            function activate(tabName) {
-                buttons.forEach(function (b) {
-                    b.classList.toggle('active', b.dataset.tab === tabName);
-                });
-                panels.forEach(function (p) {
-                    var btn = buttons.find(function (b) { return b.dataset.panel === p.id; });
-                    p.classList.toggle('active', btn ? btn.dataset.tab === tabName : false);
-                });
-                sessionStorage.setItem(STORAGE_KEY, tabName);
-            }
-
-            buttons.forEach(function (btn) {
-                btn.addEventListener('click', function () {
-                    activate(btn.dataset.tab);
-                });
-            });
-
-            // Restore saved tab or default to first
-            var saved = sessionStorage.getItem(STORAGE_KEY);
-            var initial = (saved && buttons.some(function (b) { return b.dataset.tab === saved; }))
-                ? saved
-                : '{{firstTabName}}';
-            activate(initial);
-
-            // Auto-refresh preserving active tab
-            setTimeout(function () { location.reload(); }, 5000);
-        })();
+        setTimeout(function () { location.reload(); }, 5000);
     </script>
 </body>
 </html>
