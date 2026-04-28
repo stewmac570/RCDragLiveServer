@@ -62,25 +62,27 @@ public sealed class PublicLiveController : ControllerBase
         var sortedKeys = classes.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
         bool multiClass = sortedKeys.Count > 1;
 
-        StringBuilder sections = new StringBuilder();
+        StringBuilder content = new StringBuilder();
 
-        for (int i = 0; i < sortedKeys.Count; i++)
+        if (multiClass)
         {
-            string key = sortedKeys[i];
-            LiveRaceState state = classes[key];
-
-            sections.AppendLine("<section class=\"class-section\">");
-            if (multiClass)
+            content.AppendLine("<div class=\"tab-bar\">");
+            for (int i = 0; i < sortedKeys.Count; i++)
             {
-                sections.AppendLine($"<h2 class=\"class-heading\">{Html(key)}</h2>");
+                content.AppendLine($"  <button class=\"tab-btn\" data-tab=\"{i}\">{Html(sortedKeys[i])}</button>");
             }
-            sections.Append(BuildClassPanel(state));
-            sections.AppendLine("</section>");
+            content.AppendLine("</div>");
 
-            if (multiClass && i < sortedKeys.Count - 1)
+            for (int i = 0; i < sortedKeys.Count; i++)
             {
-                sections.AppendLine("<div class=\"class-divider\"></div>");
+                content.AppendLine($"<div class=\"tab-panel\" data-index=\"{i}\">");
+                content.Append(BuildClassPanel(classes[sortedKeys[i]]));
+                content.AppendLine("</div>");
             }
+        }
+        else
+        {
+            content.Append(BuildClassPanel(classes[sortedKeys[0]]));
         }
 
         return $$"""
@@ -151,28 +153,45 @@ public sealed class PublicLiveController : ControllerBase
             color: #ede9fe;
         }
 
-        /* ---- Class Sections ---- */
-        .class-section {
-            margin-bottom: 8px;
+        /* ---- Tabs ---- */
+        .tab-bar {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
         }
 
-        .class-heading {
-            font-size: 24px;
-            font-weight: 900;
-            color: #f8fafc;
-            margin: 0 0 16px 0;
-            padding: 12px 20px;
+        .tab-btn {
             background: #1e293b;
             border: 1px solid #334155;
-            border-radius: 12px;
+            border-radius: 999px;
+            color: #94a3b8;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 700;
+            padding: 7px 20px;
             text-transform: uppercase;
-            letter-spacing: 0.06em;
+            letter-spacing: 0.07em;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
         }
 
-        .class-divider {
-            border: none;
-            border-top: 2px solid #334155;
-            margin: 32px 0;
+        .tab-btn:hover {
+            background: #263348;
+            color: #e2e8f0;
+        }
+
+        .tab-btn.active {
+            background: #1d4ed8;
+            border-color: #1d4ed8;
+            color: #fff;
+        }
+
+        .tab-panel {
+            display: none;
+        }
+
+        .tab-panel.active {
+            display: block;
         }
 
         /* ---- Section chrome ---- */
@@ -351,12 +370,69 @@ public sealed class PublicLiveController : ControllerBase
 <body>
     <div class="wrap">
 
-        <!-- Class Sections -->
-{{sections}}
+{{content}}
         <div class="footer">Auto-refreshes every 5 seconds</div>
     </div>
     <script>
-        setTimeout(function () { location.reload(); }, 5000);
+        (function () {
+            var CYCLE_MS = 8000;
+            var STORAGE_KEY = 'rcDragTab';
+            var buttons = Array.from(document.querySelectorAll('.tab-btn'));
+            var panels = Array.from(document.querySelectorAll('.tab-panel'));
+            var count = buttons.length;
+            var cycleTimer = null;
+
+            if (count === 0) {
+                setTimeout(function () { location.reload(); }, 5000);
+                return;
+            }
+
+            function activate(index) {
+                buttons.forEach(function (b, i) { b.classList.toggle('active', i === index); });
+                panels.forEach(function (p, i) { p.classList.toggle('active', i === index); });
+            }
+
+            function startCycle(fromIndex) {
+                if (cycleTimer) clearInterval(cycleTimer);
+                var current = fromIndex;
+                cycleTimer = setInterval(function () {
+                    current = (current + 1) % count;
+                    activate(current);
+                    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ index: current, time: Date.now() }));
+                }, CYCLE_MS);
+            }
+
+            var stored = null;
+            try { stored = JSON.parse(sessionStorage.getItem(STORAGE_KEY)); } catch (e) {}
+
+            var now = Date.now();
+            var activeIndex = 0;
+
+            if (stored && typeof stored.index === 'number' && typeof stored.time === 'number') {
+                var elapsed = now - stored.time;
+                if (elapsed >= CYCLE_MS) {
+                    activeIndex = (stored.index + 1) % count;
+                    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ index: activeIndex, time: now }));
+                } else {
+                    activeIndex = stored.index % count;
+                }
+            } else {
+                sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ index: 0, time: now }));
+            }
+
+            activate(activeIndex);
+            startCycle(activeIndex);
+
+            buttons.forEach(function (btn, i) {
+                btn.addEventListener('click', function () {
+                    activate(i);
+                    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ index: i, time: Date.now() }));
+                    startCycle(i);
+                });
+            });
+
+            setTimeout(function () { location.reload(); }, 5000);
+        })();
     </script>
 </body>
 </html>
