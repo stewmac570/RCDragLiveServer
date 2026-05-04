@@ -11,4 +11,5 @@ public class LiveRaceState
     public string? RRStandings { get; set; }
     public List<LiveMatch> Matches { get; set; } = new();
     public List<LiveWinner> Winners { get; set; } = new();
+    public bool DialInLocked { get; set; }
 }

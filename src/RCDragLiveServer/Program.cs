@@ -33,6 +33,7 @@ if (!string.IsNullOrWhiteSpace(portValue) && int.TryParse(portValue, out var por
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddScoped<ApiKeyAuthorizationFilter>();
+builder.Services.AddSingleton<IDialInStore, InMemoryDialInStore>();
 builder.Services.AddSingleton<ILiveRaceStateStore, InMemoryLiveRaceStateStore>();
 
 var app = builder.Build();

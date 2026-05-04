@@ -6,4 +6,6 @@ public class LiveMatch
     public string Driver2 { get; set; } = string.Empty;
     public string RoundLabel { get; set; } = string.Empty;
     public string? WinnerName { get; set; }
+    public double? LeftDriverDialIn { get; set; }
+    public double? RightDriverDialIn { get; set; }
 }
