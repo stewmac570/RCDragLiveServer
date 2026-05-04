@@ -6,6 +6,12 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
 {
     private readonly object _sync = new();
     private readonly Dictionary<string, LiveRaceState> _classes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly IDialInStore _dialInStore;
+
+    public InMemoryLiveRaceStateStore(IDialInStore dialInStore)
+    {
+        _dialInStore = dialInStore;
+    }
 
     public LiveRaceState GetLatest()
     {
@@ -37,8 +43,11 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
                 if (!string.Equals(existingEventName, state.EventName, StringComparison.OrdinalIgnoreCase))
                 {
                     _classes.Clear();
+                    _dialInStore.ClearAll();
                 }
             }
+
+            _dialInStore.SetLocked(state.DialInLocked);
 
             string key = string.IsNullOrWhiteSpace(state.ClassType) ? "(Unknown)" : state.ClassType;
             _classes[key] = state;
