@@ -375,8 +375,8 @@ public sealed class PublicLiveController : ControllerBase
     </div>
     <script>
         (function () {
+            var STORAGE_KEY = 'rcDragActiveClass';
             var CYCLE_MS = 8000;
-            var STORAGE_KEY = 'rcDragTab';
             var buttons = Array.from(document.querySelectorAll('.tab-btn'));
             var panels = Array.from(document.querySelectorAll('.tab-panel'));
             var count = buttons.length;
@@ -398,36 +398,38 @@ public sealed class PublicLiveController : ControllerBase
                 cycleTimer = setInterval(function () {
                     current = (current + 1) % count;
                     activate(current);
-                    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ index: current, time: Date.now() }));
                 }, CYCLE_MS);
             }
 
-            var stored = null;
-            try { stored = JSON.parse(sessionStorage.getItem(STORAGE_KEY)); } catch (e) {}
+            var storedClass = null;
+            try { storedClass = localStorage.getItem(STORAGE_KEY); } catch (e) {}
 
-            var now = Date.now();
             var activeIndex = 0;
+            var userHasSelection = false;
 
-            if (stored && typeof stored.index === 'number' && typeof stored.time === 'number') {
-                var elapsed = now - stored.time;
-                if (elapsed >= CYCLE_MS) {
-                    activeIndex = (stored.index + 1) % count;
-                    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ index: activeIndex, time: now }));
+            if (storedClass) {
+                var found = -1;
+                buttons.forEach(function (btn, i) {
+                    if (btn.textContent.trim() === storedClass) { found = i; }
+                });
+                if (found >= 0) {
+                    activeIndex = found;
+                    userHasSelection = true;
                 } else {
-                    activeIndex = stored.index % count;
+                    try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
                 }
-            } else {
-                sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ index: 0, time: now }));
             }
 
             activate(activeIndex);
-            startCycle(activeIndex);
+            if (!userHasSelection) {
+                startCycle(activeIndex);
+            }
 
             buttons.forEach(function (btn, i) {
                 btn.addEventListener('click', function () {
                     activate(i);
-                    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ index: i, time: Date.now() }));
-                    startCycle(i);
+                    try { localStorage.setItem(STORAGE_KEY, btn.textContent.trim()); } catch (e) {}
+                    if (cycleTimer) { clearInterval(cycleTimer); cycleTimer = null; }
                 });
             });
 
