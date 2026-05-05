@@ -426,11 +426,11 @@ public sealed class PublicLiveController : ControllerBase
         {
             var rounds = state.Matches
                 .GroupBy(m => m.RoundLabel)
-                .OrderBy(g => g.Key);
+                .OrderBy(g => RoundSortKey(g.Key));
 
             foreach (var round in rounds)
             {
-                string roundLabel = Html(round.Key);
+                string roundLabel = Html(RoundDisplayName(round.Key));
                 bracketHtml.AppendLine($"  <div class=\"round-header\">{(string.IsNullOrWhiteSpace(roundLabel) ? "Round" : roundLabel)}</div>");
                 bracketHtml.AppendLine("  <div class=\"match-list\">");
 
@@ -479,7 +479,7 @@ public sealed class PublicLiveController : ControllerBase
             wb.AppendLine("  <tbody>");
             foreach (LiveWinner w in state.Winners)
             {
-                wb.AppendLine($"    <tr><td>{Html(w.RoundLabel)}</td><td class=\"winner-cell\">{Html(w.WinnerName)}</td><td class=\"loser-cell\">{Html(w.LoserName)}</td></tr>");
+                wb.AppendLine($"    <tr><td>{Html(RoundDisplayName(w.RoundLabel))}</td><td class=\"winner-cell\">{Html(w.WinnerName)}</td><td class=\"loser-cell\">{Html(w.LoserName)}</td></tr>");
             }
             wb.AppendLine("  </tbody>");
             wb.AppendLine("</table>");
@@ -551,6 +551,38 @@ public sealed class PublicLiveController : ControllerBase
             "            <button id=\"dialin-submit\">Save Dial-In</button>\n" +
             "            <div class=\"dialin-status\" id=\"dialin-status\"></div>\n" +
             "        </div>\n";
+    }
+
+    private static int RoundSortKey(string label)
+    {
+        if (string.IsNullOrWhiteSpace(label)) return 10000;
+        var mRr = System.Text.RegularExpressions.Regex.Match(label, @"^RR(\d+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (mRr.Success && int.TryParse(mRr.Groups[1].Value, out int rrN)) return 100 + rrN;
+        var mR = System.Text.RegularExpressions.Regex.Match(label, @"^R(\d+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (mR.Success && int.TryParse(mR.Groups[1].Value, out int rN)) return 200 + rN;
+        var mLb = System.Text.RegularExpressions.Regex.Match(label, @"^LB-R(\d+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (mLb.Success && int.TryParse(mLb.Groups[1].Value, out int lbN)) return 300 + lbN;
+        if (string.Equals(label, "LB-SF", StringComparison.OrdinalIgnoreCase)) return 390;
+        if (string.Equals(label, "LB-F",  StringComparison.OrdinalIgnoreCase)) return 399;
+        if (string.Equals(label, "SF",    StringComparison.OrdinalIgnoreCase)) return 490;
+        if (string.Equals(label, "F",     StringComparison.OrdinalIgnoreCase)) return 499;
+        return 10000;
+    }
+
+    private static string RoundDisplayName(string label)
+    {
+        if (string.IsNullOrWhiteSpace(label)) return label ?? string.Empty;
+        var mRr = System.Text.RegularExpressions.Regex.Match(label, @"^RR(\d+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (mRr.Success) return "Round " + mRr.Groups[1].Value;
+        var mR = System.Text.RegularExpressions.Regex.Match(label, @"^R(\d+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (mR.Success) return "Round " + mR.Groups[1].Value;
+        var mLb = System.Text.RegularExpressions.Regex.Match(label, @"^LB-R(\d+)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (mLb.Success) return "Buyback Round " + mLb.Groups[1].Value;
+        if (string.Equals(label, "LB-SF", StringComparison.OrdinalIgnoreCase)) return "Buyback Semi Final";
+        if (string.Equals(label, "LB-F",  StringComparison.OrdinalIgnoreCase)) return "Buyback Final";
+        if (string.Equals(label, "SF",    StringComparison.OrdinalIgnoreCase)) return "Semi Final";
+        if (string.Equals(label, "F",     StringComparison.OrdinalIgnoreCase)) return "Final";
+        return label;
     }
 
     private static string DialInBadge(double? dialIn)
