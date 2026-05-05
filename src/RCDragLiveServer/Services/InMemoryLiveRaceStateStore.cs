@@ -66,10 +66,13 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
         {
             PurgeExpired();
 
-            // Determine the event key: prefer EventId, fall back to EventName for old clients
-            string eventKey = !string.IsNullOrWhiteSpace(state.EventId)
-                ? state.EventId
-                : (!string.IsNullOrWhiteSpace(state.EventName) ? state.EventName : "(default)");
+            // Key by EventName so that all classes belonging to the same multi-class
+            // event share one bucket, regardless of whether each class was assigned its
+            // own unique EventId by the desktop app.  Fall back to EventId (then a
+            // sentinel) only when EventName is blank.
+            string eventKey = !string.IsNullOrWhiteSpace(state.EventName)
+                ? state.EventName
+                : (!string.IsNullOrWhiteSpace(state.EventId) ? state.EventId : "(default)");
 
             if (!_events.TryGetValue(eventKey, out var bucket))
             {
