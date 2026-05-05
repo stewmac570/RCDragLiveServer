@@ -2,6 +2,7 @@ namespace RCDragLiveServer.Models;
 
 public class LiveRaceState
 {
+    public string EventId { get; set; } = string.Empty;
     public string EventName { get; set; } = string.Empty;
     public string EventDate { get; set; } = string.Empty;
     public string ClassType { get; set; } = string.Empty;
