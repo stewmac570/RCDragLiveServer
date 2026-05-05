@@ -86,7 +86,7 @@ public sealed class PublicLiveController : ControllerBase
 
         var allDriverNames = classes.Values
             .SelectMany(s => s.Matches)
-            .SelectMany(m => new[] { m.Driver1, m.Driver2 })
+            .SelectMany(m => new[] { string.IsNullOrEmpty(m.LeftDriver) ? m.Driver1 : m.LeftDriver, string.IsNullOrEmpty(m.RightDriver) ? m.Driver2 : m.RightDriver })
             .Where(n => !string.IsNullOrWhiteSpace(n) && !string.Equals(n, "BYE", StringComparison.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
@@ -436,27 +436,27 @@ public sealed class PublicLiveController : ControllerBase
 
                 foreach (LiveMatch match in round)
                 {
-                    string driver1 = Html(match.Driver1);
-                    string driver2 = Html(match.Driver2);
+                    string leftDriver  = Html(string.IsNullOrEmpty(match.LeftDriver)  ? match.Driver1 : match.LeftDriver);
+                    string rightDriver = Html(string.IsNullOrEmpty(match.RightDriver) ? match.Driver2 : match.RightDriver);
                     bool resolved  = !string.IsNullOrWhiteSpace(match.WinnerName);
 
                     bracketHtml.AppendLine("    <div class=\"match-card\">");
 
                     if (resolved)
                     {
-                        bool d1Won       = string.Equals(match.WinnerName, match.Driver1, StringComparison.OrdinalIgnoreCase);
+                        bool leftWon     = string.Equals(match.WinnerName, string.IsNullOrEmpty(match.LeftDriver) ? match.Driver1 : match.LeftDriver, StringComparison.OrdinalIgnoreCase);
                         string winName   = Html(match.WinnerName);
-                        string loseName  = d1Won ? driver2 : driver1;
-                        double? winDialIn = d1Won ? match.LeftDriverDialIn : match.RightDriverDialIn;
-                        double? losDialIn = d1Won ? match.RightDriverDialIn : match.LeftDriverDialIn;
+                        string loseName  = leftWon ? rightDriver : leftDriver;
+                        double? winDialIn = leftWon ? match.LeftDriverDialIn : match.RightDriverDialIn;
+                        double? losDialIn = leftWon ? match.RightDriverDialIn : match.LeftDriverDialIn;
                         bracketHtml.AppendLine($"      <div class=\"driver winner\">{winName}{DialInBadge(winDialIn)} <span class=\"win-badge\">WIN</span></div>");
                         bracketHtml.AppendLine($"      <div class=\"driver loser\">{loseName}{DialInBadge(losDialIn)}</div>");
                     }
                     else
                     {
-                        bracketHtml.AppendLine($"      <div class=\"driver driver1\">{driver1}{DialInBadge(match.LeftDriverDialIn)}</div>");
+                        bracketHtml.AppendLine($"      <div class=\"driver driver1\">{leftDriver}{DialInBadge(match.LeftDriverDialIn)}</div>");
                         bracketHtml.AppendLine("      <div class=\"vs\">vs</div>");
-                        bracketHtml.AppendLine($"      <div class=\"driver driver2\">{driver2}{DialInBadge(match.RightDriverDialIn)}</div>");
+                        bracketHtml.AppendLine($"      <div class=\"driver driver2\">{rightDriver}{DialInBadge(match.RightDriverDialIn)}</div>");
                     }
 
                     bracketHtml.AppendLine("    </div>");
