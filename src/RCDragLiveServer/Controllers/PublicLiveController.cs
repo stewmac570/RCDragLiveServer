@@ -22,13 +22,33 @@ public sealed class PublicLiveController : ControllerBase
     [HttpGet("")]
     public ContentResult Home()
     {
-        Dictionary<string, LiveRaceState> classes = stateStore.GetAll();
-
         ApplyNoCacheHeaders();
 
-        string html = BuildHomePage(classes, dialInStore.IsLocked);
+        var events = stateStore.GetActiveEvents();
 
-        return Content(html, "text/html; charset=utf-8");
+        if (events.Count == 0)
+            return Content(BuildNoEventPage(), "text/html; charset=utf-8");
+
+        if (events.Count == 1)
+        {
+            var classes = stateStore.GetEvent(events[0].EventId) ?? new Dictionary<string, LiveRaceState>();
+            return Content(BuildHomePage(classes, dialInStore.IsLocked), "text/html; charset=utf-8");
+        }
+
+        return Content(BuildEventSelectorPage(events), "text/html; charset=utf-8");
+    }
+
+    [HttpGet("event/{eventId}")]
+    public ContentResult GetEventPage(string eventId)
+    {
+        ApplyNoCacheHeaders();
+
+        var classes = stateStore.GetEvent(eventId);
+
+        if (classes == null || classes.Count == 0)
+            return Content(BuildNoEventPage(), "text/html; charset=utf-8");
+
+        return Content(BuildHomePage(classes, dialInStore.IsLocked), "text/html; charset=utf-8");
     }
 
     [HttpGet("api/live")]
@@ -237,6 +257,58 @@ public sealed class PublicLiveController : ControllerBase
             "        <div class=\"footer\">Auto-refreshes every 5 seconds</div>\n" +
             "    </div>\n" +
             "    <script>\n" + script + "    </script>\n" +
+            "</body>\n</html>\n";
+    }
+
+    private static string BuildEventSelectorPage(IReadOnlyList<EventSummary> events)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("<div class=\"event-selector\">");
+        sb.AppendLine("  <h1 class=\"selector-title\">Live Events</h1>");
+        sb.AppendLine("  <p class=\"selector-subtitle\">Select an event to view its live scoreboard</p>");
+        sb.AppendLine("  <div class=\"event-list\">");
+
+        foreach (var ev in events)
+        {
+            string name = Html(ev.EventName);
+            string date = Html(ev.EventDate);
+            string classInfo = ev.ClassCount == 1 ? "1 class" : ev.ClassCount + " classes";
+            sb.AppendLine($"    <a class=\"event-card\" href=\"/event/{Html(ev.EventId)}\">");
+            sb.AppendLine($"      <div class=\"event-card-name\">{(string.IsNullOrWhiteSpace(name) ? "Unnamed Event" : name)}</div>");
+            if (!string.IsNullOrWhiteSpace(date))
+                sb.AppendLine($"      <div class=\"event-card-meta\">{date} &middot; {classInfo}</div>");
+            else
+                sb.AppendLine($"      <div class=\"event-card-meta\">{classInfo}</div>");
+            sb.AppendLine("    </a>");
+        }
+
+        sb.AppendLine("  </div>");
+        sb.AppendLine("  <div class=\"footer\">Auto-refreshes every 5 seconds</div>");
+        sb.AppendLine("</div>");
+
+        var css = """
+        * { box-sizing: border-box; }
+        body { margin:0; padding:0; font-family:Arial,Helvetica,sans-serif; background:#0a0f1a; color:#f1f5f9; display:flex; align-items:center; justify-content:center; min-height:100vh; }
+        .event-selector { width:100%; max-width:600px; padding:32px 16px; }
+        .selector-title { font-size:32px; font-weight:900; margin:0 0 8px 0; color:#f8fafc; text-align:center; }
+        .selector-subtitle { color:#94a3b8; font-size:15px; text-align:center; margin:0 0 28px 0; }
+        .event-list { display:grid; gap:14px; }
+        .event-card { background:#1e293b; border:1px solid #334155; border-radius:16px; padding:20px 24px; text-decoration:none; color:inherit; display:block; transition:background .15s,border-color .15s; }
+        .event-card:hover { background:#263348; border-color:#3b82f6; }
+        .event-card-name { font-size:22px; font-weight:800; color:#f8fafc; margin-bottom:6px; }
+        .event-card-meta { font-size:14px; color:#94a3b8; }
+        .footer { margin-top:28px; text-align:center; color:#475569; font-size:12px; }
+""";
+
+        return
+            "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n" +
+            "    <meta charset=\"utf-8\" />\n" +
+            "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n" +
+            "    <title>RC Drag Live — Select Event</title>\n" +
+            "    <style>\n" + css + "    </style>\n" +
+            "</head>\n<body>\n" +
+            sb.ToString() +
+            "    <script>setTimeout(function () { location.reload(); }, 5000);</script>\n" +
             "</body>\n</html>\n";
     }
 

@@ -4,8 +4,16 @@ namespace RCDragLiveServer.Services;
 
 public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
 {
+    private static readonly TimeSpan EventExpiry = TimeSpan.FromHours(2);
+
+    private sealed class EventBucket
+    {
+        public Dictionary<string, LiveRaceState> Classes { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public DateTime LastUpdated { get; set; } = DateTime.UtcNow;
+    }
+
     private readonly object _sync = new();
-    private readonly Dictionary<string, LiveRaceState> _classes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, EventBucket> _events = new(StringComparer.OrdinalIgnoreCase);
     private readonly IDialInStore _dialInStore;
 
     public InMemoryLiveRaceStateStore(IDialInStore dialInStore)
@@ -17,17 +25,36 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
     {
         lock (_sync)
         {
-            if (_classes.Count == 0) return new LiveRaceState();
-            string key = _classes.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).First();
-            return _classes[key];
+            PurgeExpired();
+            if (_events.Count == 0) return new LiveRaceState();
+
+            // Return latest state from the most recently updated event
+            var bucket = _events.Values.OrderByDescending(b => b.LastUpdated).First();
+            return bucket.Classes.Values.OrderBy(s => s.ClassType, StringComparer.OrdinalIgnoreCase).First();
         }
     }
 
+    // Returns all classes across all active events (flat), for backward-compat with /api/live
     public Dictionary<string, LiveRaceState> GetAll()
     {
         lock (_sync)
         {
-            return new Dictionary<string, LiveRaceState>(_classes, StringComparer.OrdinalIgnoreCase);
+            PurgeExpired();
+
+            // If only one event active, return its classes keyed by classType (existing behaviour)
+            if (_events.Count == 1)
+                return new Dictionary<string, LiveRaceState>(_events.Values.First().Classes, StringComparer.OrdinalIgnoreCase);
+
+            // Multiple events: key by "eventId/classType" to avoid collisions
+            var result = new Dictionary<string, LiveRaceState>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (eventId, bucket) in _events)
+            {
+                foreach (var (classType, state) in bucket.Classes)
+                {
+                    result[eventId + "/" + classType] = state;
+                }
+            }
+            return result;
         }
     }
 
@@ -37,20 +64,71 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
 
         lock (_sync)
         {
-            if (_classes.Count > 0)
+            PurgeExpired();
+
+            // Determine the event key: prefer EventId, fall back to EventName for old clients
+            string eventKey = !string.IsNullOrWhiteSpace(state.EventId)
+                ? state.EventId
+                : (!string.IsNullOrWhiteSpace(state.EventName) ? state.EventName : "(default)");
+
+            if (!_events.TryGetValue(eventKey, out var bucket))
             {
-                string existingEventName = _classes.Values.First().EventName;
-                if (!string.Equals(existingEventName, state.EventName, StringComparison.OrdinalIgnoreCase))
-                {
-                    _classes.Clear();
-                    _dialInStore.ClearAll();
-                }
+                bucket = new EventBucket();
+                _events[eventKey] = bucket;
             }
 
             _dialInStore.SetLocked(state.DialInLocked);
 
-            string key = string.IsNullOrWhiteSpace(state.ClassType) ? "(Unknown)" : state.ClassType;
-            _classes[key] = state;
+            string classKey = string.IsNullOrWhiteSpace(state.ClassType) ? "(Unknown)" : state.ClassType;
+            bucket.Classes[classKey] = state;
+            bucket.LastUpdated = DateTime.UtcNow;
         }
+    }
+
+    public IReadOnlyList<EventSummary> GetActiveEvents()
+    {
+        lock (_sync)
+        {
+            PurgeExpired();
+
+            return _events
+                .Select(kvp =>
+                {
+                    var firstClass = kvp.Value.Classes.Values.FirstOrDefault();
+                    return new EventSummary(
+                        EventId: kvp.Key,
+                        EventName: firstClass?.EventName ?? kvp.Key,
+                        EventDate: firstClass?.EventDate ?? string.Empty,
+                        ClassCount: kvp.Value.Classes.Count,
+                        LastUpdated: kvp.Value.LastUpdated);
+                })
+                .OrderByDescending(s => s.LastUpdated)
+                .ToList();
+        }
+    }
+
+    public Dictionary<string, LiveRaceState>? GetEvent(string eventId)
+    {
+        lock (_sync)
+        {
+            PurgeExpired();
+
+            if (!_events.TryGetValue(eventId, out var bucket))
+                return null;
+
+            return new Dictionary<string, LiveRaceState>(bucket.Classes, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private void PurgeExpired()
+    {
+        var cutoff = DateTime.UtcNow - EventExpiry;
+        var expired = _events
+            .Where(kvp => kvp.Value.LastUpdated < cutoff)
+            .Select(kvp => kvp.Key)
+            .ToList();
+
+        foreach (var key in expired)
+            _events.Remove(key);
     }
 }
