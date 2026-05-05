@@ -170,13 +170,56 @@ public sealed class PublicLiveController : ControllerBase
         var script = """
         (function () {
             var STORAGE_KEY = 'rcDragActiveClass';
+            var DIALIN_KEY = 'rcDialInForm';
             var CYCLE_MS = 8000;
             var buttons = Array.from(document.querySelectorAll('.tab-btn'));
             var panels = Array.from(document.querySelectorAll('.tab-panel'));
             var count = buttons.length;
             var cycleTimer = null;
 
-            if (count === 0) { setTimeout(function () { location.reload(); }, 5000); return; }
+            function saveDialInState() {
+                try {
+                    var nameEl = document.getElementById('dialin-name');
+                    var valEl = document.getElementById('dialin-value');
+                    var pinEl = document.getElementById('dialin-pin');
+                    sessionStorage.setItem(DIALIN_KEY, JSON.stringify({
+                        name: nameEl ? nameEl.value : '',
+                        val: valEl ? valEl.value : '',
+                        pin: pinEl ? pinEl.value : ''
+                    }));
+                } catch (e) {}
+            }
+
+            function restoreDialInState() {
+                try {
+                    var raw = sessionStorage.getItem(DIALIN_KEY);
+                    if (!raw) return;
+                    var s = JSON.parse(raw);
+                    var nameEl = document.getElementById('dialin-name');
+                    var valEl = document.getElementById('dialin-value');
+                    var pinEl = document.getElementById('dialin-pin');
+                    if (nameEl && s.name) nameEl.value = s.name;
+                    if (valEl && s.val) valEl.value = s.val;
+                    if (pinEl && s.pin) pinEl.value = s.pin;
+                } catch (e) {}
+            }
+
+            function clearDialInState() {
+                try { sessionStorage.removeItem(DIALIN_KEY); } catch (e) {}
+            }
+
+            function isDialInFocused() {
+                var f = document.activeElement;
+                return f && (f.id === 'dialin-name' || f.id === 'dialin-value' || f.id === 'dialin-pin');
+            }
+
+            function scheduleReload() {
+                if (isDialInFocused()) { setTimeout(scheduleReload, 3000); return; }
+                saveDialInState();
+                location.reload();
+            }
+
+            if (count === 0) { setTimeout(scheduleReload, 5000); return; }
 
             function activate(index) {
                 buttons.forEach(function (b, i) { b.classList.toggle('active', i === index); });
@@ -208,10 +251,11 @@ public sealed class PublicLiveController : ControllerBase
                 });
             });
 
-            setTimeout(function () { location.reload(); }, 5000);
+            setTimeout(scheduleReload, 5000);
 
             var form = document.getElementById('dialin-form');
             if (form) {
+                restoreDialInState();
                 var nameSelect = document.getElementById('dialin-name');
                 var dialInInput = document.getElementById('dialin-value');
                 var pinInput = document.getElementById('dialin-pin');
@@ -233,7 +277,7 @@ public sealed class PublicLiveController : ControllerBase
                     .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
                     .then(function (res) {
                         submitBtn.disabled = false;
-                        if (res.ok) { showStatus('Dial-in saved: ' + val.toFixed(3) + 's', 'ok'); }
+                        if (res.ok) { clearDialInState(); showStatus('Dial-in saved: ' + val.toFixed(3) + 's', 'ok'); }
                         else if (res.status === 423) { showStatus('Round in progress — dial-in locked.', 'err'); }
                         else if (res.body && res.body.error === 'invalid_pin') { showStatus('Incorrect PIN.', 'err'); }
                         else if (res.body && res.body.error === 'invalid_pin_format') { showStatus('PIN must be exactly 4 digits.', 'err'); }
