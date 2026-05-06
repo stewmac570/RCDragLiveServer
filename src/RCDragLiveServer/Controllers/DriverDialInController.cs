@@ -12,13 +12,13 @@ public sealed class DriverDialInController(IDialInStore dialInStore) : Controlle
     [HttpPost]
     public IActionResult Post([FromBody] DriverDialInRequest request)
     {
-        if (request is null || string.IsNullOrWhiteSpace(request.DriverName))
+        if (request is null || request.DriverId <= 0)
             return BadRequest(new { error = "invalid_payload" });
 
         if (string.IsNullOrWhiteSpace(request.EventId))
             return BadRequest(new { error = "invalid_event" });
 
-        var (success, error) = dialInStore.SubmitUpdate(request.EventId, request.DriverName, request.DialIn, request.Pin);
+        var (success, error) = dialInStore.SubmitUpdate(request.EventId, request.DriverId, request.DialIn, request.Pin);
 
         if (!success)
         {

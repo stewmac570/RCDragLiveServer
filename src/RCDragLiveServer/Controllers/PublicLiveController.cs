@@ -85,12 +85,17 @@ public sealed class PublicLiveController : ControllerBase
         var sortedKeys = classes.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
         bool multiClass = sortedKeys.Count > 1;
 
-        var allDriverNames = classes.Values
+        var allDrivers = classes.Values
             .SelectMany(s => s.Matches)
-            .SelectMany(m => new[] { string.IsNullOrEmpty(m.LeftDriver) ? m.Driver1 : m.LeftDriver, string.IsNullOrEmpty(m.RightDriver) ? m.Driver2 : m.RightDriver })
-            .Where(n => !string.IsNullOrWhiteSpace(n) && !string.Equals(n, "BYE", StringComparison.OrdinalIgnoreCase))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+            .SelectMany(m => new[]
+            {
+                (m.LeftDriverId,  string.IsNullOrEmpty(m.LeftDriver)  ? m.Driver1 : m.LeftDriver),
+                (m.RightDriverId, string.IsNullOrEmpty(m.RightDriver) ? m.Driver2 : m.RightDriver)
+            })
+            .Where(p => p.Item1 > 0 && !string.IsNullOrWhiteSpace(p.Item2) && !string.Equals(p.Item2, "BYE", StringComparison.OrdinalIgnoreCase))
+            .GroupBy(p => p.Item1)
+            .Select(g => g.First())
+            .OrderBy(p => p.Item2, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         StringBuilder content = new StringBuilder();
@@ -116,7 +121,7 @@ public sealed class PublicLiveController : ControllerBase
             content.Append(BuildClassPanel(classes[sortedKeys[0]]));
         }
 
-        content.Append(BuildDialInForm(allDriverNames, dialInLocked, eventId));
+        content.Append(BuildDialInForm(allDrivers, dialInLocked, eventId));
 
         var css = """
         * { box-sizing: border-box; }
@@ -265,17 +270,17 @@ public sealed class PublicLiveController : ControllerBase
                 var submitBtn = document.getElementById('dialin-submit');
                 var statusEl = document.getElementById('dialin-status');
                 submitBtn.addEventListener('click', function () {
-                    var name = nameSelect ? nameSelect.value : '';
+                    var driverId = nameSelect ? parseInt(nameSelect.value, 10) : 0;
                     var val = parseFloat(dialInInput.value);
                     var pin = pinInput.value.trim() || null;
-                    if (!name) { showStatus('Please select your name.', 'err'); return; }
+                    if (!driverId || driverId <= 0) { showStatus('Please select your name.', 'err'); return; }
                     if (isNaN(val) || val <= 0) { showStatus('Enter a valid dial-in time (e.g. 3.250).', 'err'); return; }
                     submitBtn.disabled = true;
                     showStatus('Saving…', 'info');
                     fetch('/api/dialin', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ eventId: PAGE_EVENT_ID, driverName: name, dialIn: val, pin: pin })
+                        body: JSON.stringify({ eventId: PAGE_EVENT_ID, driverId: driverId, dialIn: val, pin: pin })
                     })
                     .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
                     .then(function (res) {
@@ -528,9 +533,9 @@ public sealed class PublicLiveController : ControllerBase
             rrHtml + "\n";
     }
 
-    private static string BuildDialInForm(List<string> driverNames, bool locked, string eventId)
+    private static string BuildDialInForm(List<(int Id, string Name)> drivers, bool locked, string eventId)
     {
-        if (driverNames.Count == 0) return string.Empty;
+        if (drivers.Count == 0) return string.Empty;
 
         if (locked)
         {
@@ -544,8 +549,8 @@ public sealed class PublicLiveController : ControllerBase
 
         StringBuilder options = new StringBuilder();
         options.AppendLine("                <option value=\"\">&#8212; select your name &#8212;</option>");
-        foreach (var name in driverNames)
-            options.AppendLine($"                <option value=\"{Html(name)}\">{Html(name)}</option>");
+        foreach (var (id, name) in drivers)
+            options.AppendLine($"                <option value=\"{id}\">{Html(name)}</option>");
 
         return
             "        <!-- Dial-In Update Form -->\n" +
