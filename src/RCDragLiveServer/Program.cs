@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.RateLimiting;
 using RCDragLiveServer.Security;
 using RCDragLiveServer.Services;
 
@@ -35,9 +36,22 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddScoped<ApiKeyAuthorizationFilter>();
 builder.Services.AddSingleton<IDialInStore, InMemoryDialInStore>();
 builder.Services.AddSingleton<ILiveRaceStateStore, InMemoryLiveRaceStateStore>();
+builder.Services.AddSingleton<IDialInRateLimiter, InMemoryDialInRateLimiter>();
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddFixedWindowLimiter("dialin-per-ip", o =>
+    {
+        o.Window = TimeSpan.FromMinutes(1);
+        o.PermitLimit = 10;
+        o.QueueLimit = 0;
+    });
+});
 
 var app = builder.Build();
 
+app.UseRateLimiter();
 app.MapControllers();
 
 app.Run();

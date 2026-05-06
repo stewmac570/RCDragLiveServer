@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Mvc;
 using RCDragLiveServer.Models;
 using RCDragLiveServer.Security;
@@ -7,9 +8,10 @@ namespace RCDragLiveServer.Controllers;
 
 [ApiController]
 [Route("api/dialin")]
-public sealed class DriverDialInController(IDialInStore dialInStore) : ControllerBase
+public sealed class DriverDialInController(IDialInStore dialInStore, IDialInRateLimiter rateLimiter) : ControllerBase
 {
     [HttpPost]
+    [EnableRateLimiting("dialin-per-ip")]
     public IActionResult Post([FromBody] DriverDialInRequest request)
     {
         if (request is null || request.DriverId <= 0)
@@ -17,6 +19,9 @@ public sealed class DriverDialInController(IDialInStore dialInStore) : Controlle
 
         if (string.IsNullOrWhiteSpace(request.EventId))
             return BadRequest(new { error = "invalid_event" });
+
+        if (!rateLimiter.TryAcquire(request.DriverId))
+            return StatusCode(StatusCodes.Status429TooManyRequests, new { error = "rate_limited" });
 
         var (success, error) = dialInStore.SubmitUpdate(request.EventId, request.DriverId, request.DialIn, request.Pin);
 
