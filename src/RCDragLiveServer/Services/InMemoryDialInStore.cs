@@ -4,6 +4,7 @@ public sealed class InMemoryDialInStore : IDialInStore
 {
     private sealed class EventData
     {
+        // Stored as BCrypt hashes, never plaintext.
         public Dictionary<int, string> Pins { get; } = new();
         public Dictionary<int, double?> DialIns { get; } = new();
         public bool Locked { get; set; }
@@ -37,6 +38,16 @@ public sealed class InMemoryDialInStore : IDialInStore
         if (driverId <= 0)
             return (false, "invalid_driver");
 
+        // Validate format and hash before acquiring the lock so BCrypt work
+        // doesn't block other callers longer than necessary.
+        string? newHash = null;
+        if (!string.IsNullOrEmpty(pin))
+        {
+            if (pin.Length != 4 || !pin.All(char.IsDigit))
+                return (false, "invalid_pin_format");
+            newHash = BCrypt.Net.BCrypt.HashPassword(pin);
+        }
+
         lock (_sync)
         {
             var data = GetOrCreate(eventId);
@@ -44,16 +55,14 @@ public sealed class InMemoryDialInStore : IDialInStore
             if (data.Locked)
                 return (false, "locked");
 
-            if (data.Pins.TryGetValue(driverId, out var existingPin))
+            if (data.Pins.TryGetValue(driverId, out var existingHash))
             {
-                if (string.IsNullOrEmpty(pin) || pin != existingPin)
+                if (string.IsNullOrEmpty(pin) || !BCrypt.Net.BCrypt.Verify(pin, existingHash))
                     return (false, "invalid_pin");
             }
-            else if (!string.IsNullOrEmpty(pin))
+            else if (newHash is not null)
             {
-                if (pin.Length != 4 || !pin.All(char.IsDigit))
-                    return (false, "invalid_pin_format");
-                data.Pins[driverId] = pin;
+                data.Pins[driverId] = newHash;
             }
 
             data.DialIns[driverId] = dialIn;
