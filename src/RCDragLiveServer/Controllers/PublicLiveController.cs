@@ -31,8 +31,9 @@ public sealed class PublicLiveController : ControllerBase
 
         if (events.Count == 1)
         {
-            var classes = stateStore.GetEvent(events[0].EventId) ?? new Dictionary<string, LiveRaceState>();
-            return Content(BuildHomePage(classes, dialInStore.IsLocked), "text/html; charset=utf-8");
+            var eventId = events[0].EventId;
+            var classes = stateStore.GetEvent(eventId) ?? new Dictionary<string, LiveRaceState>();
+            return Content(BuildHomePage(classes, dialInStore.IsLocked(eventId), eventId), "text/html; charset=utf-8");
         }
 
         return Content(BuildEventSelectorPage(events), "text/html; charset=utf-8");
@@ -48,7 +49,7 @@ public sealed class PublicLiveController : ControllerBase
         if (classes == null || classes.Count == 0)
             return Content(BuildNoEventPage(), "text/html; charset=utf-8");
 
-        return Content(BuildHomePage(classes, dialInStore.IsLocked), "text/html; charset=utf-8");
+        return Content(BuildHomePage(classes, dialInStore.IsLocked(eventId), eventId), "text/html; charset=utf-8");
     }
 
     [HttpGet("api/live")]
@@ -74,7 +75,7 @@ public sealed class PublicLiveController : ControllerBase
         Response.Headers.Expires = "0";
     }
 
-    private static string BuildHomePage(Dictionary<string, LiveRaceState> classes, bool dialInLocked)
+    private static string BuildHomePage(Dictionary<string, LiveRaceState> classes, bool dialInLocked, string eventId)
     {
         if (classes.Count == 0)
         {
@@ -115,7 +116,7 @@ public sealed class PublicLiveController : ControllerBase
             content.Append(BuildClassPanel(classes[sortedKeys[0]]));
         }
 
-        content.Append(BuildDialInForm(allDriverNames, dialInLocked));
+        content.Append(BuildDialInForm(allDriverNames, dialInLocked, eventId));
 
         var css = """
         * { box-sizing: border-box; }
@@ -272,7 +273,7 @@ public sealed class PublicLiveController : ControllerBase
                     fetch('/api/dialin', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ driverName: name, dialIn: val, pin: pin })
+                        body: JSON.stringify({ eventId: PAGE_EVENT_ID, driverName: name, dialIn: val, pin: pin })
                     })
                     .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
                     .then(function (res) {
@@ -300,7 +301,7 @@ public sealed class PublicLiveController : ControllerBase
             content.ToString() +
             "        <div class=\"footer\">Auto-refreshes every 5 seconds</div>\n" +
             "    </div>\n" +
-            "    <script>\n" + script + "    </script>\n" +
+            "    <script>\n" + $"var PAGE_EVENT_ID = '{Html(eventId)}';\n" + script + "    </script>\n" +
             "</body>\n</html>\n";
     }
 
@@ -512,7 +513,7 @@ public sealed class PublicLiveController : ControllerBase
             rrHtml + "\n";
     }
 
-    private static string BuildDialInForm(List<string> driverNames, bool locked)
+    private static string BuildDialInForm(List<string> driverNames, bool locked, string eventId)
     {
         if (driverNames.Count == 0) return string.Empty;
 

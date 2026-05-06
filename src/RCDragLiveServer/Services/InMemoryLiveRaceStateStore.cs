@@ -80,7 +80,7 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
                 _events[eventKey] = bucket;
             }
 
-            _dialInStore.SetLocked(state.DialInLocked);
+            _dialInStore.SetLocked(eventKey, state.DialInLocked);
 
             string classKey = string.IsNullOrWhiteSpace(state.ClassType) ? "(Unknown)" : state.ClassType;
             bucket.Classes[classKey] = state;
