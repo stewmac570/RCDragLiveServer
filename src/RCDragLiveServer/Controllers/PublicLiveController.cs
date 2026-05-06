@@ -138,13 +138,15 @@ public sealed class PublicLiveController : ControllerBase
         .next-up-drivers { font-size:36px; font-weight:900; color:#fbbf24; line-height:1.15; word-break:break-word; padding:10px 0 4px; }
         .round-header { font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.1em; color:#38bdf8; margin:14px 0 6px 0; padding-bottom:4px; border-bottom:1px solid #1e40af; }
         .match-list { display:grid; gap:10px; margin-bottom:4px; }
-        .match-card { background:#1e293b; border:1px solid #334155; border-radius:12px; padding:14px 16px; text-align:center; }
-        .driver { font-size:22px; font-weight:800; line-height:1.2; word-break:break-word; }
+        .match-card { background:#1e293b; border:1px solid #334155; border-radius:12px; padding:0; display:flex; align-items:stretch; }
+        .lane-slot { flex:1; display:flex; flex-direction:column; align-items:center; text-align:center; padding:12px 10px; }
+        .lane-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.1em; color:#64748b; margin-bottom:6px; }
+        .driver { font-size:18px; font-weight:800; line-height:1.2; word-break:break-word; }
         .driver.winner { color:#4ade80; }
-        .driver.loser { color:#64748b; font-size:17px; font-weight:600; text-decoration:line-through; margin-top:4px; }
+        .driver.loser { color:#64748b; font-size:16px; font-weight:600; text-decoration:line-through; }
         .dial-in-badge { display:inline-block; background:#0f2d4a; color:#7dd3fc; font-size:12px; font-weight:700; letter-spacing:.04em; padding:2px 8px; border-radius:999px; vertical-align:middle; margin-left:8px; font-family:'Courier New',Courier,monospace; }
         .win-badge { display:inline-block; background:#14532d; color:#86efac; font-size:11px; font-weight:700; letter-spacing:.08em; padding:2px 7px; border-radius:999px; vertical-align:middle; margin-left:6px; }
-        .vs { font-size:12px; font-weight:700; color:#64748b; margin:8px 0; text-transform:uppercase; letter-spacing:.1em; }
+        .vs { font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:.1em; display:flex; align-items:center; padding:0 4px; flex-shrink:0; }
         .winners-table { width:100%; border-collapse:collapse; font-size:15px; }
         .winners-table th { text-align:left; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:#64748b; padding:6px 10px; border-bottom:1px solid #334155; }
         .winners-table td { padding:8px 10px; border-bottom:1px solid #1e293b; vertical-align:middle; }
@@ -445,19 +447,32 @@ public sealed class PublicLiveController : ControllerBase
 
                     if (resolved)
                     {
-                        bool leftWon     = string.Equals(match.WinnerName, string.IsNullOrEmpty(match.LeftDriver) ? match.Driver1 : match.LeftDriver, StringComparison.OrdinalIgnoreCase);
-                        string winName   = Html(match.WinnerName);
-                        string loseName  = leftWon ? rightDriver : leftDriver;
-                        double? winDialIn = leftWon ? match.LeftDriverDialIn : match.RightDriverDialIn;
-                        double? losDialIn = leftWon ? match.RightDriverDialIn : match.LeftDriverDialIn;
-                        bracketHtml.AppendLine($"      <div class=\"driver winner\">{winName}{DialInBadge(winDialIn)} <span class=\"win-badge\">WIN</span></div>");
-                        bracketHtml.AppendLine($"      <div class=\"driver loser\">{loseName}{DialInBadge(losDialIn)}</div>");
+                        bool leftWon = string.Equals(match.WinnerName, string.IsNullOrEmpty(match.LeftDriver) ? match.Driver1 : match.LeftDriver, StringComparison.OrdinalIgnoreCase);
+                        string leftClass  = leftWon  ? "winner" : "loser";
+                        string rightClass = !leftWon ? "winner" : "loser";
+                        string leftBadge  = leftWon  ? " <span class=\"win-badge\">WIN</span>" : string.Empty;
+                        string rightBadge = !leftWon ? " <span class=\"win-badge\">WIN</span>" : string.Empty;
+                        bracketHtml.AppendLine("      <div class=\"lane-slot\">");
+                        bracketHtml.AppendLine("        <div class=\"lane-label\">Left</div>");
+                        bracketHtml.AppendLine($"        <div class=\"driver {leftClass}\">{leftDriver}{DialInBadge(match.LeftDriverDialIn)}{leftBadge}</div>");
+                        bracketHtml.AppendLine("      </div>");
+                        bracketHtml.AppendLine("      <div class=\"vs\">vs</div>");
+                        bracketHtml.AppendLine("      <div class=\"lane-slot\">");
+                        bracketHtml.AppendLine("        <div class=\"lane-label\">Right</div>");
+                        bracketHtml.AppendLine($"        <div class=\"driver {rightClass}\">{rightDriver}{DialInBadge(match.RightDriverDialIn)}{rightBadge}</div>");
+                        bracketHtml.AppendLine("      </div>");
                     }
                     else
                     {
-                        bracketHtml.AppendLine($"      <div class=\"driver driver1\">{leftDriver}{DialInBadge(match.LeftDriverDialIn)}</div>");
+                        bracketHtml.AppendLine("      <div class=\"lane-slot\">");
+                        bracketHtml.AppendLine("        <div class=\"lane-label\">Left</div>");
+                        bracketHtml.AppendLine($"        <div class=\"driver\">{leftDriver}{DialInBadge(match.LeftDriverDialIn)}</div>");
+                        bracketHtml.AppendLine("      </div>");
                         bracketHtml.AppendLine("      <div class=\"vs\">vs</div>");
-                        bracketHtml.AppendLine($"      <div class=\"driver driver2\">{rightDriver}{DialInBadge(match.RightDriverDialIn)}</div>");
+                        bracketHtml.AppendLine("      <div class=\"lane-slot\">");
+                        bracketHtml.AppendLine("        <div class=\"lane-label\">Right</div>");
+                        bracketHtml.AppendLine($"        <div class=\"driver\">{rightDriver}{DialInBadge(match.RightDriverDialIn)}</div>");
+                        bracketHtml.AppendLine("      </div>");
                     }
 
                     bracketHtml.AppendLine("    </div>");
