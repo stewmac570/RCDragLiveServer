@@ -15,7 +15,10 @@ public sealed class DriverDialInController(IDialInStore dialInStore) : Controlle
         if (request is null || string.IsNullOrWhiteSpace(request.DriverName))
             return BadRequest(new { error = "invalid_payload" });
 
-        var (success, error) = dialInStore.SubmitUpdate(request.DriverName, request.DialIn, request.Pin);
+        if (string.IsNullOrWhiteSpace(request.EventId))
+            return BadRequest(new { error = "invalid_event" });
+
+        var (success, error) = dialInStore.SubmitUpdate(request.EventId, request.DriverName, request.DialIn, request.Pin);
 
         if (!success)
         {
@@ -33,8 +36,11 @@ public sealed class DriverDialInController(IDialInStore dialInStore) : Controlle
 
     [HttpGet]
     [RequireApiKey]
-    public IActionResult Get()
+    public IActionResult Get([FromQuery] string eventId)
     {
-        return Ok(dialInStore.GetAll());
+        if (string.IsNullOrWhiteSpace(eventId))
+            return BadRequest(new { error = "invalid_event" });
+
+        return Ok(dialInStore.GetAll(eventId));
     }
 }

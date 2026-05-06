@@ -2,65 +2,88 @@ namespace RCDragLiveServer.Services;
 
 public sealed class InMemoryDialInStore : IDialInStore
 {
-    private readonly object _sync = new();
-    private readonly Dictionary<string, string> _pins = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, double?> _dialIns = new(StringComparer.OrdinalIgnoreCase);
-    private bool _locked;
-
-    public bool IsLocked
+    private sealed class EventData
     {
-        get { lock (_sync) { return _locked; } }
+        public Dictionary<string, string> Pins { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, double?> DialIns { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public bool Locked { get; set; }
     }
 
-    public (bool success, string? error) SubmitUpdate(string driverName, double? dialIn, string? pin)
+    private readonly object _sync = new();
+    private readonly Dictionary<string, EventData> _events = new(StringComparer.OrdinalIgnoreCase);
+
+    private EventData GetOrCreate(string eventId)
     {
+        if (!_events.TryGetValue(eventId, out var data))
+        {
+            data = new EventData();
+            _events[eventId] = data;
+        }
+        return data;
+    }
+
+    public bool IsLocked(string eventId)
+    {
+        lock (_sync)
+        {
+            return _events.TryGetValue(eventId, out var data) && data.Locked;
+        }
+    }
+
+    public (bool success, string? error) SubmitUpdate(string eventId, string driverName, double? dialIn, string? pin)
+    {
+        if (string.IsNullOrWhiteSpace(eventId))
+            return (false, "invalid_event");
         if (string.IsNullOrWhiteSpace(driverName))
             return (false, "invalid_driver");
 
         lock (_sync)
         {
-            if (_locked)
+            var data = GetOrCreate(eventId);
+
+            if (data.Locked)
                 return (false, "locked");
 
-            if (_pins.TryGetValue(driverName, out var existingPin))
+            if (data.Pins.TryGetValue(driverName, out var existingPin))
             {
-                // PIN is set — must match
                 if (string.IsNullOrEmpty(pin) || pin != existingPin)
                     return (false, "invalid_pin");
             }
             else if (!string.IsNullOrEmpty(pin))
             {
-                // First time setting a PIN — validate format (4 digits)
                 if (pin.Length != 4 || !pin.All(char.IsDigit))
                     return (false, "invalid_pin_format");
-                _pins[driverName] = pin;
+                data.Pins[driverName] = pin;
             }
 
-            _dialIns[driverName] = dialIn;
+            data.DialIns[driverName] = dialIn;
             return (true, null);
         }
     }
 
-    public Dictionary<string, double?> GetAll()
+    public Dictionary<string, double?> GetAll(string eventId)
     {
         lock (_sync)
         {
-            return new Dictionary<string, double?>(_dialIns, StringComparer.OrdinalIgnoreCase);
+            if (!_events.TryGetValue(eventId, out var data))
+                return new Dictionary<string, double?>(StringComparer.OrdinalIgnoreCase);
+            return new Dictionary<string, double?>(data.DialIns, StringComparer.OrdinalIgnoreCase);
         }
     }
 
-    public void SetLocked(bool locked)
-    {
-        lock (_sync) { _locked = locked; }
-    }
-
-    public void ClearAll()
+    public void SetLocked(string eventId, bool locked)
     {
         lock (_sync)
         {
-            _pins.Clear();
-            _dialIns.Clear();
-            _locked = false;
+            GetOrCreate(eventId).Locked = locked;
+        }
+    }
+
+    public void ClearAll(string eventId)
+    {
+        lock (_sync)
+        {
+            _events.Remove(eventId);
         }
     }
 }
