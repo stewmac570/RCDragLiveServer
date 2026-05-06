@@ -10,6 +10,11 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
     {
         public Dictionary<string, LiveRaceState> Classes { get; } = new(StringComparer.OrdinalIgnoreCase);
         public DateTime LastUpdated { get; set; } = DateTime.UtcNow;
+        // Tracks the session (EventId GUID) that last wrote to this bucket.
+        // When a push arrives with a different non-empty EventId, the bucket is
+        // cleared before storing the new state so stale results from a prior
+        // session never bleed into the current one.
+        public string? LastSessionId { get; set; }
     }
 
     private readonly object _sync = new();
@@ -80,11 +85,35 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
                 _events[eventKey] = bucket;
             }
 
+            // Detect new session: if the incoming EventId (session GUID) is non-empty
+            // and differs from what was last stored, clear stale state from the prior session.
+            if (!string.IsNullOrWhiteSpace(state.EventId) &&
+                !string.IsNullOrWhiteSpace(bucket.LastSessionId) &&
+                !string.Equals(state.EventId, bucket.LastSessionId, StringComparison.OrdinalIgnoreCase))
+            {
+                bucket.Classes.Clear();
+            }
+
+            if (!string.IsNullOrWhiteSpace(state.EventId))
+                bucket.LastSessionId = state.EventId;
+
             _dialInStore.SetLocked(eventKey, state.DialInLocked);
 
             string classKey = string.IsNullOrWhiteSpace(state.ClassType) ? "(Unknown)" : state.ClassType;
             bucket.Classes[classKey] = state;
             bucket.LastUpdated = DateTime.UtcNow;
+        }
+    }
+
+    public void ClearEvent(string eventId, string? eventName)
+    {
+        string eventKey = !string.IsNullOrWhiteSpace(eventName)
+            ? eventName
+            : (!string.IsNullOrWhiteSpace(eventId) ? eventId : "(default)");
+
+        lock (_sync)
+        {
+            _events.Remove(eventKey);
         }
     }
 
