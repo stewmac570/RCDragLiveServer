@@ -294,7 +294,11 @@ public sealed class PublicLiveController : ControllerBase
             "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n" +
             "    <title>RC Drag Live</title>\n" +
             "    <style>\n" + css + "    </style>\n" +
-            "</head>\n<body>\n    <div class=\"wrap\">\n\n" +
+            "</head>\n<body>\n" +
+            "    <div style=\"max-width:760px;margin:0 auto;padding:12px 16px 0;\">\n" +
+            "      <a href=\"/\" style=\"color:#94a3b8;font-size:13px;text-decoration:none;letter-spacing:0.02em;\">&#8592; All events</a>\n" +
+            "    </div>\n" +
+            "    <div class=\"wrap\">\n\n" +
             content.ToString() +
             "        <div class=\"footer\">Auto-refreshes every 5 seconds</div>\n" +
             "    </div>\n" +
