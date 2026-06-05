@@ -8,7 +8,10 @@ namespace RCDragLiveServer.Controllers;
 
 [ApiController]
 [Route("api/dialin")]
-public sealed class DriverDialInController(IDialInStore dialInStore, IDialInRateLimiter rateLimiter) : ControllerBase
+public sealed class DriverDialInController(
+    IDialInStore dialInStore,
+    IDialInRateLimiter rateLimiter,
+    ILiveRaceStateStore stateStore) : ControllerBase
 {
     [HttpPost]
     [EnableRateLimiting("dialin-per-ip")]
@@ -20,10 +23,23 @@ public sealed class DriverDialInController(IDialInStore dialInStore, IDialInRate
         if (string.IsNullOrWhiteSpace(request.EventId))
             return BadRequest(new { error = "invalid_event" });
 
-        if (!rateLimiter.TryAcquire(request.DriverId))
+        if (!IsValidDialIn(request.DialIn))
+            return BadRequest(new { error = "invalid_dialin" });
+
+        if (!IsValidPin(request.Pin))
+            return BadRequest(new { error = "invalid_pin_format" });
+
+        var eventKey = stateStore.ResolveEventKey(request.EventId);
+        if (!stateStore.EventHasDriver(eventKey, request.DriverId))
+            return BadRequest(new { error = "invalid_driver" });
+
+        if (dialInStore.IsLocked(eventKey))
+            return StatusCode(423, new { error = "locked" });
+
+        if (!rateLimiter.TryAcquire(eventKey, request.DriverId))
             return StatusCode(StatusCodes.Status429TooManyRequests, new { error = "rate_limited" });
 
-        var (success, error) = dialInStore.SubmitUpdate(request.EventId, request.DriverId, request.DialIn, request.Pin);
+        var (success, error) = dialInStore.SubmitUpdate(eventKey, request.DriverId, request.DialIn, request.Pin);
 
         if (!success)
         {
@@ -32,6 +48,7 @@ public sealed class DriverDialInController(IDialInStore dialInStore, IDialInRate
                 "locked"             => StatusCode(423, new { error = "locked" }),
                 "invalid_pin"        => Unauthorized(new { error = "invalid_pin" }),
                 "invalid_pin_format" => BadRequest(new { error = "invalid_pin_format" }),
+                "invalid_dialin"     => BadRequest(new { error = "invalid_dialin" }),
                 _                    => BadRequest(new { error })
             };
         }
@@ -46,6 +63,20 @@ public sealed class DriverDialInController(IDialInStore dialInStore, IDialInRate
         if (string.IsNullOrWhiteSpace(eventId))
             return BadRequest(new { error = "invalid_event" });
 
-        return Ok(dialInStore.GetAll(eventId));
+        return Ok(dialInStore.GetAll(stateStore.ResolveEventKey(eventId)));
+    }
+
+    private static bool IsValidDialIn(double? dialIn)
+    {
+        return dialIn.HasValue &&
+            dialIn.Value > 0 &&
+            !double.IsNaN(dialIn.Value) &&
+            !double.IsInfinity(dialIn.Value);
+    }
+
+    private static bool IsValidPin(string? pin)
+    {
+        return string.IsNullOrEmpty(pin) ||
+            (pin.Length == 4 && pin.All(char.IsDigit));
     }
 }

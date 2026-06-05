@@ -19,6 +19,7 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
 
     private readonly object _sync = new();
     private readonly Dictionary<string, EventBucket> _events = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _eventAliases = new(StringComparer.OrdinalIgnoreCase);
     private readonly IDialInStore _dialInStore;
 
     public InMemoryLiveRaceStateStore(IDialInStore dialInStore)
@@ -75,9 +76,7 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
             // event share one bucket, regardless of whether each class was assigned its
             // own unique EventId by the desktop app.  Fall back to EventId (then a
             // sentinel) only when EventName is blank.
-            string eventKey = !string.IsNullOrWhiteSpace(state.EventName)
-                ? state.EventName
-                : (!string.IsNullOrWhiteSpace(state.EventId) ? state.EventId : "(default)");
+            string eventKey = BuildEventKey(state.EventId, state.EventName);
 
             if (!_events.TryGetValue(eventKey, out var bucket))
             {
@@ -92,11 +91,13 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
                 !string.Equals(state.EventId, bucket.LastSessionId, StringComparison.OrdinalIgnoreCase))
             {
                 bucket.Classes.Clear();
+                _dialInStore.ClearAll(eventKey);
             }
 
             if (!string.IsNullOrWhiteSpace(state.EventId))
                 bucket.LastSessionId = state.EventId;
 
+            RegisterAliases(eventKey, state.EventId, state.EventName);
             _dialInStore.SetLocked(eventKey, state.DialInLocked);
 
             string classKey = string.IsNullOrWhiteSpace(state.ClassType) ? "(Unknown)" : state.ClassType;
@@ -107,13 +108,13 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
 
     public void ClearEvent(string eventId, string? eventName)
     {
-        string eventKey = !string.IsNullOrWhiteSpace(eventName)
-            ? eventName
-            : (!string.IsNullOrWhiteSpace(eventId) ? eventId : "(default)");
+        string eventKey = ResolveEventKey(BuildEventKey(eventId, eventName));
 
         lock (_sync)
         {
             _events.Remove(eventKey);
+            _dialInStore.ClearAll(eventKey);
+            RemoveAliasesFor(eventKey);
         }
     }
 
@@ -145,10 +146,39 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
         {
             PurgeExpired();
 
-            if (!_events.TryGetValue(eventId, out var bucket))
+            if (!_events.TryGetValue(ResolveEventKey(eventId), out var bucket))
                 return null;
 
             return new Dictionary<string, LiveRaceState>(bucket.Classes, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    public string ResolveEventKey(string eventId)
+    {
+        if (string.IsNullOrWhiteSpace(eventId))
+            return "(default)";
+
+        lock (_sync)
+        {
+            return ResolveEventKeyNoLock(eventId);
+        }
+    }
+
+    public bool EventHasDriver(string eventId, int driverId)
+    {
+        if (driverId <= 0)
+            return false;
+
+        lock (_sync)
+        {
+            PurgeExpired();
+
+            if (!_events.TryGetValue(ResolveEventKeyNoLock(eventId), out var bucket))
+                return false;
+
+            return bucket.Classes.Values
+                .SelectMany(state => state.Matches)
+                .Any(match => match.LeftDriverId == driverId || match.RightDriverId == driverId);
         }
     }
 
@@ -161,6 +191,57 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
             .ToList();
 
         foreach (var key in expired)
+        {
             _events.Remove(key);
+            _dialInStore.ClearAll(key);
+            RemoveAliasesFor(key);
+        }
+    }
+
+    private string ResolveEventKeyNoLock(string eventId)
+    {
+        var key = string.IsNullOrWhiteSpace(eventId) ? "(default)" : eventId;
+        return _eventAliases.TryGetValue(key, out var eventKey) ? eventKey : key;
+    }
+
+    private static string BuildEventKey(string? eventId, string? eventName)
+    {
+        if (!string.IsNullOrWhiteSpace(eventName))
+            return eventName;
+
+        if (!string.IsNullOrWhiteSpace(eventId))
+            return eventId;
+
+        return "(default)";
+    }
+
+    private void RegisterAliases(string eventKey, string? eventId, string? eventName)
+    {
+        AddAlias(eventKey, eventKey);
+        AddAlias(eventName, eventKey);
+        AddAlias(eventId, eventKey);
+
+        if (Guid.TryParse(eventId, out var parsedEventId))
+        {
+            AddAlias(parsedEventId.ToString("N"), eventKey);
+            AddAlias(parsedEventId.ToString("D"), eventKey);
+        }
+    }
+
+    private void AddAlias(string? alias, string eventKey)
+    {
+        if (!string.IsNullOrWhiteSpace(alias))
+            _eventAliases[alias] = eventKey;
+    }
+
+    private void RemoveAliasesFor(string eventKey)
+    {
+        var aliases = _eventAliases
+            .Where(kvp => string.Equals(kvp.Value, eventKey, StringComparison.OrdinalIgnoreCase))
+            .Select(kvp => kvp.Key)
+            .ToList();
+
+        foreach (var alias in aliases)
+            _eventAliases.Remove(alias);
     }
 }
