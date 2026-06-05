@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using RCDragLiveServer.Models;
 using RCDragLiveServer.Services;
@@ -39,7 +40,10 @@ public sealed class PublicLiveController : ControllerBase
         if (classes == null || classes.Count == 0)
             return Content(BuildNoEventPage(), "text/html; charset=utf-8");
 
-        return Content(BuildHomePage(classes, dialInStore.IsLocked(eventId), eventId), "text/html; charset=utf-8");
+        var eventKey = stateStore.ResolveEventKey(eventId);
+        var submittedDialIns = dialInStore.GetAll(eventKey);
+
+        return Content(BuildHomePage(classes, submittedDialIns, dialInStore.IsLocked(eventKey), eventKey), "text/html; charset=utf-8");
     }
 
     [HttpGet("api/live")]
@@ -65,7 +69,11 @@ public sealed class PublicLiveController : ControllerBase
         Response.Headers.Expires = "0";
     }
 
-    private static string BuildHomePage(Dictionary<string, LiveRaceState> classes, bool dialInLocked, string eventId)
+    private static string BuildHomePage(
+        Dictionary<string, LiveRaceState> classes,
+        IReadOnlyDictionary<int, double?> submittedDialIns,
+        bool dialInLocked,
+        string eventId)
     {
         if (classes.Count == 0)
         {
@@ -79,13 +87,17 @@ public sealed class PublicLiveController : ControllerBase
             .SelectMany(s => s.Matches)
             .SelectMany(m => new[]
             {
-                (m.LeftDriverId,  string.IsNullOrEmpty(m.LeftDriver)  ? m.Driver1 : m.LeftDriver),
-                (m.RightDriverId, string.IsNullOrEmpty(m.RightDriver) ? m.Driver2 : m.RightDriver)
+                (Id: m.LeftDriverId,  Name: string.IsNullOrEmpty(m.LeftDriver)  ? m.Driver1 : m.LeftDriver, DialIn: EffectiveDialIn(m.LeftDriverId, m.LeftDriverDialIn, submittedDialIns)),
+                (Id: m.RightDriverId, Name: string.IsNullOrEmpty(m.RightDriver) ? m.Driver2 : m.RightDriver, DialIn: EffectiveDialIn(m.RightDriverId, m.RightDriverDialIn, submittedDialIns))
             })
-            .Where(p => p.Item1 > 0 && !string.IsNullOrWhiteSpace(p.Item2) && !string.Equals(p.Item2, "BYE", StringComparison.OrdinalIgnoreCase))
-            .GroupBy(p => p.Item1)
-            .Select(g => g.First())
-            .OrderBy(p => p.Item2, StringComparer.OrdinalIgnoreCase)
+            .Where(p => p.Id > 0 && !string.IsNullOrWhiteSpace(p.Name) && !string.Equals(p.Name, "BYE", StringComparison.OrdinalIgnoreCase))
+            .GroupBy(p => p.Id)
+            .Select(g =>
+            {
+                var first = g.First();
+                return (first.Id, first.Name, DialIn: g.Select(p => p.DialIn).FirstOrDefault(v => v.HasValue));
+            })
+            .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         StringBuilder content = new StringBuilder();
@@ -102,13 +114,13 @@ public sealed class PublicLiveController : ControllerBase
             for (int i = 0; i < sortedKeys.Count; i++)
             {
                 content.AppendLine($"<div class=\"tab-panel\" data-index=\"{i}\">");
-                content.Append(BuildClassPanel(classes[sortedKeys[i]]));
+                content.Append(BuildClassPanel(classes[sortedKeys[i]], submittedDialIns));
                 content.AppendLine("</div>");
             }
         }
         else
         {
-            content.Append(BuildClassPanel(classes[sortedKeys[0]]));
+            content.Append(BuildClassPanel(classes[sortedKeys[0]], submittedDialIns));
         }
 
         content.Append(BuildDialInForm(allDrivers, dialInLocked, eventId));
@@ -150,7 +162,8 @@ public sealed class PublicLiveController : ControllerBase
         .loser-cell { color:#64748b; }
         .rr-standings { background:#0f172a; border:1px solid #334155; border-radius:12px; padding:14px 16px; font-family:'Courier New',Courier,monospace; font-size:13px; color:#e2e8f0; overflow-x:auto; white-space:pre; line-height:1.5; }
         .dialin-form { background:#1e293b; border:1px solid #334155; border-radius:16px; padding:20px; margin-bottom:16px; }
-        .dialin-form h3 { margin:0 0 14px 0; font-size:16px; font-weight:700; color:#f8fafc; }
+        .dialin-form h3 { margin:0 0 6px 0; font-size:16px; font-weight:700; color:#f8fafc; }
+        .dialin-help { color:#94a3b8; font-size:13px; line-height:1.35; margin:0 0 14px 0; }
         .dialin-form label { display:block; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:#94a3b8; margin-bottom:4px; }
         .dialin-form select,.dialin-form input[type=number],.dialin-form input[type=password] { width:100%; background:#0f172a; border:1px solid #475569; border-radius:8px; color:#f1f5f9; font-size:15px; padding:8px 12px; margin-bottom:12px; outline:none; }
         .dialin-form select:focus,.dialin-form input:focus { border-color:#3b82f6; }
@@ -163,12 +176,13 @@ public sealed class PublicLiveController : ControllerBase
         .dialin-locked-notice { background:#451a03; border:1px solid #92400e; border-radius:12px; color:#fcd34d; font-size:14px; font-weight:600; padding:12px 16px; text-align:center; }
         .footer { margin-top:20px; text-align:center; color:#475569; font-size:12px; }
         @media(min-width:640px) { .match-list { grid-template-columns:1fr 1fr; } }
+        @media(max-width:520px) { .dialin-form .form-row { grid-template-columns:1fr; gap:0; } }
 """;
 
         var script = """
         (function () {
             var STORAGE_KEY = 'rcDragActiveClass';
-            var DIALIN_KEY = 'rcDialInForm';
+            var DIALIN_KEY = 'rcDialInForm:' + PAGE_EVENT_ID;
             var CYCLE_MS = 8000;
             var buttons = Array.from(document.querySelectorAll('.tab-btn'));
             var panels = Array.from(document.querySelectorAll('.tab-panel'));
@@ -179,11 +193,9 @@ public sealed class PublicLiveController : ControllerBase
                 try {
                     var nameEl = document.getElementById('dialin-name');
                     var valEl = document.getElementById('dialin-value');
-                    var pinEl = document.getElementById('dialin-pin');
                     sessionStorage.setItem(DIALIN_KEY, JSON.stringify({
                         name: nameEl ? nameEl.value : '',
-                        val: valEl ? valEl.value : '',
-                        pin: pinEl ? pinEl.value : ''
+                        val: valEl ? valEl.value : ''
                     }));
                 } catch (e) {}
             }
@@ -195,10 +207,8 @@ public sealed class PublicLiveController : ControllerBase
                     var s = JSON.parse(raw);
                     var nameEl = document.getElementById('dialin-name');
                     var valEl = document.getElementById('dialin-value');
-                    var pinEl = document.getElementById('dialin-pin');
                     if (nameEl && s.name) nameEl.value = s.name;
                     if (valEl && s.val) valEl.value = s.val;
-                    if (pinEl && s.pin) pinEl.value = s.pin;
                 } catch (e) {}
             }
 
@@ -259,12 +269,27 @@ public sealed class PublicLiveController : ControllerBase
                 var pinInput = document.getElementById('dialin-pin');
                 var submitBtn = document.getElementById('dialin-submit');
                 var statusEl = document.getElementById('dialin-status');
-                submitBtn.addEventListener('click', function () {
+                function selectedDialIn() {
+                    if (!nameSelect || nameSelect.selectedIndex < 0) return '';
+                    return nameSelect.options[nameSelect.selectedIndex].getAttribute('data-dialin') || '';
+                }
+                nameSelect.addEventListener('change', function () {
+                    var current = selectedDialIn();
+                    if (current) {
+                        dialInInput.value = current;
+                        showStatus('Current dial-in loaded: ' + current + 's', 'info');
+                    } else if (!dialInInput.value) {
+                        showStatus('', '');
+                    }
+                });
+                form.addEventListener('submit', function (e) {
+                    e.preventDefault();
                     var driverId = nameSelect ? parseInt(nameSelect.value, 10) : 0;
                     var val = parseFloat(dialInInput.value);
                     var pin = pinInput.value.trim() || null;
                     if (!driverId || driverId <= 0) { showStatus('Please select your name.', 'err'); return; }
                     if (isNaN(val) || val <= 0) { showStatus('Enter a valid dial-in time (e.g. 3.250).', 'err'); return; }
+                    if (pin && !/^[0-9]{4}$/.test(pin)) { showStatus('PIN must be exactly 4 digits.', 'err'); return; }
                     submitBtn.disabled = true;
                     showStatus('Saving…', 'info');
                     fetch('/api/dialin', {
@@ -272,18 +297,56 @@ public sealed class PublicLiveController : ControllerBase
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ eventId: PAGE_EVENT_ID, driverId: driverId, dialIn: val, pin: pin })
                     })
-                    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
+                    .then(function (r) {
+                        return r.text().then(function (text) {
+                            var body = {};
+                            if (text) {
+                                try { body = JSON.parse(text); } catch (e) {}
+                            }
+                            return { ok: r.ok, status: r.status, body: body };
+                        });
+                    })
                     .then(function (res) {
                         submitBtn.disabled = false;
-                        if (res.ok) { clearDialInState(); showStatus('Dial-in saved: ' + val.toFixed(3) + 's', 'ok'); }
+                        if (res.ok) {
+                            var saved = val.toFixed(3);
+                            clearDialInState();
+                            updateVisibleDialIn(driverId, saved);
+                            showStatus('Dial-in saved: ' + saved + 's', 'ok');
+                        }
                         else if (res.status === 423) { showStatus('Round in progress — dial-in locked.', 'err'); }
+                        else if (res.status === 429) { showStatus('Too many updates — wait a few seconds.', 'err'); }
                         else if (res.body && res.body.error === 'invalid_pin') { showStatus('Incorrect PIN.', 'err'); }
                         else if (res.body && res.body.error === 'invalid_pin_format') { showStatus('PIN must be exactly 4 digits.', 'err'); }
+                        else if (res.body && res.body.error === 'invalid_driver') { showStatus('Driver is no longer active in this event.', 'err'); }
+                        else if (res.body && res.body.error === 'invalid_dialin') { showStatus('Enter a valid dial-in time (e.g. 3.250).', 'err'); }
                         else { showStatus('Error saving dial-in.', 'err'); }
                     })
                     .catch(function () { submitBtn.disabled = false; showStatus('Network error — try again.', 'err'); });
                 });
+                function updateVisibleDialIn(driverId, saved) {
+                    var option = nameSelect.options[nameSelect.selectedIndex];
+                    if (option) {
+                        var name = option.getAttribute('data-name') || option.textContent.replace(/\s+\([0-9.]+s\)$/, '');
+                        option.setAttribute('data-name', name);
+                        option.setAttribute('data-dialin', saved);
+                        option.textContent = name + ' (' + saved + 's)';
+                    }
+                    document.querySelectorAll('[data-driver-id="' + driverId + '"]').forEach(function (driverEl) {
+                        var badge = driverEl.querySelector('.dial-in-badge');
+                        if (!badge) {
+                            badge = document.createElement('span');
+                            badge.className = 'dial-in-badge';
+                            driverEl.appendChild(badge);
+                        }
+                        badge.textContent = saved + 's';
+                    });
+                }
                 function showStatus(msg, cls) { statusEl.textContent = msg; statusEl.className = 'dialin-status ' + cls; }
+                if (nameSelect.value && !dialInInput.value) {
+                    var current = selectedDialIn();
+                    if (current) dialInInput.value = current;
+                }
             }
         })();
 """;
@@ -302,7 +365,7 @@ public sealed class PublicLiveController : ControllerBase
             content.ToString() +
             "        <div class=\"footer\">Auto-refreshes every 5 seconds</div>\n" +
             "    </div>\n" +
-            "    <script>\n" + $"var PAGE_EVENT_ID = '{Html(eventId)}';\n" + script + "    </script>\n" +
+            "    <script>\n" + $"var PAGE_EVENT_ID = {JavaScriptString(eventId)};\n" + script + "    </script>\n" +
             "</body>\n</html>\n";
     }
 
@@ -329,7 +392,7 @@ public sealed class PublicLiveController : ControllerBase
                 string name = Html(ev.EventName);
                 string date = Html(ev.EventDate);
                 string classInfo = ev.ClassCount == 1 ? "1 class" : ev.ClassCount + " classes";
-                sb.AppendLine($"    <a class=\"event-card\" href=\"/event/{Html(ev.EventId)}\">");
+                sb.AppendLine($"    <a class=\"event-card\" href=\"/event/{UrlPathSegment(ev.EventId)}\">");
                 sb.AppendLine($"      <div class=\"event-card-name\">{(string.IsNullOrWhiteSpace(name) ? "Unnamed Event" : name)}</div>");
                 if (!string.IsNullOrWhiteSpace(date))
                     sb.AppendLine($"      <div class=\"event-card-meta\">{date} &middot; {classInfo}</div>");
@@ -421,7 +484,7 @@ public sealed class PublicLiveController : ControllerBase
 """;
     }
 
-    private static string BuildClassPanel(LiveRaceState state)
+    private static string BuildClassPanel(LiveRaceState state, IReadOnlyDictionary<int, double?> submittedDialIns)
     {
         string eventName = Html(state.EventName);
         string eventDate = Html(state.EventDate);
@@ -454,6 +517,8 @@ public sealed class PublicLiveController : ControllerBase
                 {
                     string leftDriver  = Html(string.IsNullOrEmpty(match.LeftDriver)  ? match.Driver1 : match.LeftDriver);
                     string rightDriver = Html(string.IsNullOrEmpty(match.RightDriver) ? match.Driver2 : match.RightDriver);
+                    double? leftDialIn = EffectiveDialIn(match.LeftDriverId, match.LeftDriverDialIn, submittedDialIns);
+                    double? rightDialIn = EffectiveDialIn(match.RightDriverId, match.RightDriverDialIn, submittedDialIns);
                     bool resolved  = !string.IsNullOrWhiteSpace(match.WinnerName);
 
                     bracketHtml.AppendLine("    <div class=\"match-card\">");
@@ -467,24 +532,24 @@ public sealed class PublicLiveController : ControllerBase
                         string rightBadge = !leftWon ? " <span class=\"win-badge\">WIN</span>" : string.Empty;
                         bracketHtml.AppendLine("      <div class=\"lane-slot\">");
                         bracketHtml.AppendLine("        <div class=\"lane-label\">Left</div>");
-                        bracketHtml.AppendLine($"        <div class=\"driver {leftClass}\">{leftDriver}{DialInBadge(match.LeftDriverDialIn)}{leftBadge}</div>");
+                        bracketHtml.AppendLine($"        <div class=\"driver {leftClass}\" data-driver-id=\"{match.LeftDriverId}\">{leftDriver}{DialInBadge(leftDialIn)}{leftBadge}</div>");
                         bracketHtml.AppendLine("      </div>");
                         bracketHtml.AppendLine("      <div class=\"vs\">vs</div>");
                         bracketHtml.AppendLine("      <div class=\"lane-slot\">");
                         bracketHtml.AppendLine("        <div class=\"lane-label\">Right</div>");
-                        bracketHtml.AppendLine($"        <div class=\"driver {rightClass}\">{rightDriver}{DialInBadge(match.RightDriverDialIn)}{rightBadge}</div>");
+                        bracketHtml.AppendLine($"        <div class=\"driver {rightClass}\" data-driver-id=\"{match.RightDriverId}\">{rightDriver}{DialInBadge(rightDialIn)}{rightBadge}</div>");
                         bracketHtml.AppendLine("      </div>");
                     }
                     else
                     {
                         bracketHtml.AppendLine("      <div class=\"lane-slot\">");
                         bracketHtml.AppendLine("        <div class=\"lane-label\">Left</div>");
-                        bracketHtml.AppendLine($"        <div class=\"driver\">{leftDriver}{DialInBadge(match.LeftDriverDialIn)}</div>");
+                        bracketHtml.AppendLine($"        <div class=\"driver\" data-driver-id=\"{match.LeftDriverId}\">{leftDriver}{DialInBadge(leftDialIn)}</div>");
                         bracketHtml.AppendLine("      </div>");
                         bracketHtml.AppendLine("      <div class=\"vs\">vs</div>");
                         bracketHtml.AppendLine("      <div class=\"lane-slot\">");
                         bracketHtml.AppendLine("        <div class=\"lane-label\">Right</div>");
-                        bracketHtml.AppendLine($"        <div class=\"driver\">{rightDriver}{DialInBadge(match.RightDriverDialIn)}</div>");
+                        bracketHtml.AppendLine($"        <div class=\"driver\" data-driver-id=\"{match.RightDriverId}\">{rightDriver}{DialInBadge(rightDialIn)}</div>");
                         bracketHtml.AppendLine("      </div>");
                     }
 
@@ -541,7 +606,7 @@ public sealed class PublicLiveController : ControllerBase
             rrHtml + "\n";
     }
 
-    private static string BuildDialInForm(List<(int Id, string Name)> drivers, bool locked, string eventId)
+    private static string BuildDialInForm(List<(int Id, string Name, double? DialIn)> drivers, bool locked, string eventId)
     {
         if (drivers.Count == 0) return string.Empty;
 
@@ -557,29 +622,34 @@ public sealed class PublicLiveController : ControllerBase
 
         StringBuilder options = new StringBuilder();
         options.AppendLine("                <option value=\"\">&#8212; select your name &#8212;</option>");
-        foreach (var (id, name) in drivers)
-            options.AppendLine($"                <option value=\"{id}\">{Html(name)}</option>");
+        foreach (var (id, name, dialIn) in drivers)
+        {
+            string dialInValue = dialIn.HasValue ? dialIn.Value.ToString("F3", System.Globalization.CultureInfo.InvariantCulture) : string.Empty;
+            string label = dialIn.HasValue ? $"{name} ({dialInValue}s)" : name;
+            options.AppendLine($"                <option value=\"{id}\" data-name=\"{Html(name)}\" data-dialin=\"{Html(dialInValue)}\">{Html(label)}</option>");
+        }
 
         return
             "        <!-- Dial-In Update Form -->\n" +
             "        <h2 class=\"section-title\">Your Dial-In</h2>\n" +
-            "        <div class=\"dialin-form\" id=\"dialin-form\">\n" +
+            "        <form class=\"dialin-form\" id=\"dialin-form\">\n" +
             "            <h3>Set Your Dial-In</h3>\n" +
+            "            <p class=\"dialin-help\">Pick your name, confirm the time, then save. Existing dial-ins load automatically.</p>\n" +
             "            <label for=\"dialin-name\">Your Name</label>\n" +
-            $"            <select id=\"dialin-name\">\n{options}            </select>\n" +
+            $"            <select id=\"dialin-name\" required>\n{options}            </select>\n" +
             "            <div class=\"form-row\">\n" +
             "                <div>\n" +
             "                    <label for=\"dialin-value\">Dial-In (seconds)</label>\n" +
-            "                    <input type=\"number\" id=\"dialin-value\" step=\"0.001\" min=\"0.001\" placeholder=\"e.g. 3.250\" />\n" +
+            "                    <input type=\"number\" id=\"dialin-value\" step=\"0.001\" min=\"0.001\" inputmode=\"decimal\" autocomplete=\"off\" required placeholder=\"e.g. 3.250\" />\n" +
             "                </div>\n" +
             "                <div>\n" +
             "                    <label for=\"dialin-pin\">PIN (optional)</label>\n" +
-            "                    <input type=\"password\" id=\"dialin-pin\" maxlength=\"4\" placeholder=\"4-digit PIN\" />\n" +
+            "                    <input type=\"password\" id=\"dialin-pin\" maxlength=\"4\" inputmode=\"numeric\" pattern=\"[0-9]{4}\" autocomplete=\"off\" placeholder=\"4-digit PIN\" />\n" +
             "                </div>\n" +
             "            </div>\n" +
-            "            <button id=\"dialin-submit\">Save Dial-In</button>\n" +
-            "            <div class=\"dialin-status\" id=\"dialin-status\"></div>\n" +
-            "        </div>\n";
+            "            <button id=\"dialin-submit\" type=\"submit\">Save Dial-In</button>\n" +
+            "            <div class=\"dialin-status\" id=\"dialin-status\" role=\"status\" aria-live=\"polite\"></div>\n" +
+            "        </form>\n";
     }
 
     private static int RoundSortKey(string label)
@@ -620,8 +690,26 @@ public sealed class PublicLiveController : ControllerBase
         return $"<span class=\"dial-in-badge\">{dialIn.Value:F3}s</span>";
     }
 
+    private static double? EffectiveDialIn(int driverId, double? liveDialIn, IReadOnlyDictionary<int, double?> submittedDialIns)
+    {
+        if (driverId > 0 && submittedDialIns.TryGetValue(driverId, out var submittedDialIn))
+            return submittedDialIn;
+
+        return liveDialIn;
+    }
+
     private static string Html(string? value)
     {
         return WebUtility.HtmlEncode(value ?? string.Empty);
+    }
+
+    private static string UrlPathSegment(string? value)
+    {
+        return Uri.EscapeDataString(value ?? string.Empty);
+    }
+
+    private static string JavaScriptString(string? value)
+    {
+        return JsonSerializer.Serialize(value ?? string.Empty);
     }
 }

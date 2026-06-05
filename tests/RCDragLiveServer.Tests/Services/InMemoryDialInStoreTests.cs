@@ -59,4 +59,34 @@ public sealed class InMemoryDialInStoreTests
         Assert.False(success);
         Assert.Equal("invalid_pin", error);
     }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0.0)]
+    [InlineData(-1.0)]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    public void SubmitUpdate_InvalidDialIn_Rejected(double? dialIn)
+    {
+        var store = new InMemoryDialInStore();
+
+        var (success, error) = store.SubmitUpdate("evt1", 1, dialIn, null);
+
+        Assert.False(success);
+        Assert.Equal("invalid_dialin", error);
+        Assert.Empty(store.GetAll("evt1"));
+    }
+
+    [Fact]
+    public void SubmitUpdate_InvalidDialIn_DoesNotOverwriteExistingValue()
+    {
+        var store = new InMemoryDialInStore();
+        store.SubmitUpdate("evt1", 1, 1.5, null);
+
+        var (success, error) = store.SubmitUpdate("evt1", 1, null, null);
+
+        Assert.False(success);
+        Assert.Equal("invalid_dialin", error);
+        Assert.Equal(1.5, store.GetAll("evt1")[1]);
+    }
 }

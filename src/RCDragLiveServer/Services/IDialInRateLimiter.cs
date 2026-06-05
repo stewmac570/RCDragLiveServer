@@ -2,5 +2,5 @@ namespace RCDragLiveServer.Services;
 
 public interface IDialInRateLimiter
 {
-    bool TryAcquire(int driverId);
+    bool TryAcquire(string eventId, int driverId);
 }

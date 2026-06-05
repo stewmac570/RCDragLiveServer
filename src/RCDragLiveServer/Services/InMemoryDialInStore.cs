@@ -37,6 +37,8 @@ public sealed class InMemoryDialInStore : IDialInStore
             return (false, "invalid_event");
         if (driverId <= 0)
             return (false, "invalid_driver");
+        if (!IsValidDialIn(dialIn))
+            return (false, "invalid_dialin");
 
         // Validate format and hash before acquiring the lock so BCrypt work
         // doesn't block other callers longer than necessary.
@@ -68,6 +70,14 @@ public sealed class InMemoryDialInStore : IDialInStore
             data.DialIns[driverId] = dialIn;
             return (true, null);
         }
+    }
+
+    private static bool IsValidDialIn(double? dialIn)
+    {
+        return dialIn.HasValue &&
+            dialIn.Value > 0 &&
+            !double.IsNaN(dialIn.Value) &&
+            !double.IsInfinity(dialIn.Value);
     }
 
     public Dictionary<int, double?> GetAll(string eventId)

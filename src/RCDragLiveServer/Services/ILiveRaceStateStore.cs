@@ -10,4 +10,6 @@ public interface ILiveRaceStateStore
     void ClearEvent(string eventId, string? eventName);
     IReadOnlyList<EventSummary> GetActiveEvents();
     Dictionary<string, LiveRaceState>? GetEvent(string eventId);
+    string ResolveEventKey(string eventId);
+    bool EventHasDriver(string eventId, int driverId);
 }

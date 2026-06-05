@@ -4,15 +4,19 @@ namespace RCDragLiveServer.Services;
 
 public sealed class InMemoryDialInRateLimiter : IDialInRateLimiter
 {
-    private readonly ConcurrentDictionary<int, DateTime> _lastAccepted = new();
+    private readonly ConcurrentDictionary<string, DateTime> _lastAccepted = new(StringComparer.OrdinalIgnoreCase);
     private static readonly TimeSpan Cooldown = TimeSpan.FromSeconds(5);
 
-    public bool TryAcquire(int driverId)
+    public bool TryAcquire(string eventId, int driverId)
     {
-        var now = DateTime.UtcNow;
-        if (_lastAccepted.TryGetValue(driverId, out var last) && now - last < Cooldown)
+        if (string.IsNullOrWhiteSpace(eventId) || driverId <= 0)
             return false;
-        _lastAccepted[driverId] = now;
+
+        var key = eventId + "|" + driverId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var now = DateTime.UtcNow;
+        if (_lastAccepted.TryGetValue(key, out var last) && now - last < Cooldown)
+            return false;
+        _lastAccepted[key] = now;
         return true;
     }
 }
