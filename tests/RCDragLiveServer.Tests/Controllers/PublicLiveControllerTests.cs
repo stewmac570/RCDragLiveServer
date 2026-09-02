@@ -242,6 +242,166 @@ public sealed class PublicLiveControllerTests
         Assert.DoesNotContain("Stewart (3.100s)", result.Content!);
     }
 
+    // The landing page is where drivers actually arrive, so the dial-in form has to
+    // live there too -- not only on /event/{id}.
+    [Fact]
+    public void Home_ActiveEventWithDrivers_RendersDialInForm()
+    {
+        var store = new StubStateStore(
+            new[] { new EventSummary("Test Event", "Test Event", "2026-05-07", ClassCount: 1, LastUpdated: DateTime.UtcNow) },
+            classesByEvent: new Dictionary<string, Dictionary<string, LiveRaceState>>
+            {
+                ["Test Event"] = ClassesWith("Test Event", (12, "Stewart"), (13, "Alex"))
+            });
+        var controller = BuildController(store);
+
+        var result = (ContentResult)controller.Home();
+
+        Assert.Contains("<form id=\"dialin-form\">", result.Content!);
+        Assert.Contains("<select id=\"dialin-name\" required></select>", result.Content!);
+        Assert.Contains("id=\"dialin-pin\"", result.Content!);
+        Assert.Contains("\"name\":\"Stewart\"", result.Content!);
+        Assert.Contains("\"name\":\"Alex\"", result.Content!);
+        Assert.Contains("\"eventKey\":\"Test Event\"", result.Content!);
+        Assert.DoesNotContain("tab-bar", result.Content!);
+    }
+
+    [Fact]
+    public void Home_SubmittedDialIn_PrefillsRosterEntry()
+    {
+        var store = new StubStateStore(
+            new[] { new EventSummary("Test Event", "Test Event", "2026-05-07", ClassCount: 1, LastUpdated: DateTime.UtcNow) },
+            classesByEvent: new Dictionary<string, Dictionary<string, LiveRaceState>>
+            {
+                ["Test Event"] = ClassesWith("Test Event", (12, "Stewart"), (13, "Alex"))
+            });
+        var dialIns = new StubDialInStore(new Dictionary<int, double?> { [12] = 3.275 });
+        var controller = BuildController(store, dialIns);
+
+        var result = (ContentResult)controller.Home();
+
+        Assert.Contains("\"dialIn\":\"3.275\"", result.Content!);
+    }
+
+    [Fact]
+    public void Home_LockedEvent_MarksEventLockedInPayload()
+    {
+        var store = new StubStateStore(
+            new[] { new EventSummary("Test Event", "Test Event", "2026-05-07", ClassCount: 1, LastUpdated: DateTime.UtcNow) },
+            classesByEvent: new Dictionary<string, Dictionary<string, LiveRaceState>>
+            {
+                ["Test Event"] = ClassesWith("Test Event", (12, "Stewart"), (13, "Alex"))
+            });
+        var controller = BuildController(store, new StubDialInStore(lockedEventId: "Test Event"));
+
+        var result = (ContentResult)controller.Home();
+
+        Assert.Contains("\"locked\":true", result.Content!);
+        Assert.Contains("id=\"dialin-locked\"", result.Content!);
+        // The picker must stay outside the form so a lock on one event cannot strand
+        // a driver whose own event is still open.
+        assertPickerOutsideForm(result.Content!);
+    }
+
+    // With more than one event running, the driver has to say which one they are in.
+    [Fact]
+    public void Home_MultipleEvents_ShowsEventPickerWithBothRosters()
+    {
+        var store = new StubStateStore(
+            new[]
+            {
+                new EventSummary("Event One", "Event One", "2026-05-07", ClassCount: 1, LastUpdated: DateTime.UtcNow),
+                new EventSummary("Event Two", "Event Two", "2026-05-07", ClassCount: 1, LastUpdated: DateTime.UtcNow)
+            },
+            classesByEvent: new Dictionary<string, Dictionary<string, LiveRaceState>>
+            {
+                ["Event One"] = ClassesWith("Event One", (12, "Stewart"), (13, "Alex")),
+                ["Event Two"] = ClassesWith("Event Two", (21, "Jordan"), (22, "Sam"))
+            });
+        var controller = BuildController(store);
+
+        var result = (ContentResult)controller.Home();
+
+        Assert.DoesNotContain("<div hidden>", result.Content!);
+        Assert.Contains("<label for=\"dialin-event\">Event</label>", result.Content!);
+        Assert.Contains("<option value=\"0\">Event One</option>", result.Content!);
+        Assert.Contains("<option value=\"1\">Event Two</option>", result.Content!);
+        Assert.Contains("\"name\":\"Jordan\"", result.Content!);
+    }
+
+    [Fact]
+    public void Home_SingleEvent_HidesEventPicker()
+    {
+        var store = new StubStateStore(
+            new[] { new EventSummary("Test Event", "Test Event", "2026-05-07", ClassCount: 1, LastUpdated: DateTime.UtcNow) },
+            classesByEvent: new Dictionary<string, Dictionary<string, LiveRaceState>>
+            {
+                ["Test Event"] = ClassesWith("Test Event", (12, "Stewart"), (13, "Alex"))
+            });
+        var controller = BuildController(store);
+
+        var result = (ContentResult)controller.Home();
+
+        Assert.Contains("<div hidden>", result.Content!);
+        Assert.Contains("<option value=\"0\">Test Event</option>", result.Content!);
+    }
+
+    [Fact]
+    public void Home_NoActiveEvents_OmitsDialInForm()
+    {
+        var store = new StubStateStore(Array.Empty<EventSummary>());
+        var controller = BuildController(store);
+
+        var result = (ContentResult)controller.Home();
+
+        Assert.DoesNotContain("id=\"dialin-form\"", result.Content!);
+        Assert.Contains("var DIALIN_EVENTS = [];", result.Content!);
+    }
+
+    // BYE placeholders and id-less rows are bracket filler, not people who can dial in.
+    [Fact]
+    public void Home_ByeAndUnknownDrivers_ExcludedFromRoster()
+    {
+        var store = new StubStateStore(
+            new[] { new EventSummary("Test Event", "Test Event", "2026-05-07", ClassCount: 1, LastUpdated: DateTime.UtcNow) },
+            classesByEvent: new Dictionary<string, Dictionary<string, LiveRaceState>>
+            {
+                ["Test Event"] = ClassesWith("Test Event", (12, "Stewart"), (13, "BYE"))
+            });
+        var controller = BuildController(store);
+
+        var result = (ContentResult)controller.Home();
+
+        Assert.Contains("\"name\":\"Stewart\"", result.Content!);
+        Assert.DoesNotContain("\"name\":\"BYE\"", result.Content!);
+    }
+
+    // Event names are user-supplied and land inside a <script> block.
+    [Fact]
+    public void Home_DialInPayload_EscapesScriptSensitiveCharacters()
+    {
+        var store = new StubStateStore(
+            new[] { new EventSummary("Bob's <Race>", "Bob's <Race>", "2026-05-07", ClassCount: 1, LastUpdated: DateTime.UtcNow) },
+            classesByEvent: new Dictionary<string, Dictionary<string, LiveRaceState>>
+            {
+                ["Bob's <Race>"] = ClassesWith("Bob's <Race>", (12, "</script>"), (13, "Alex"))
+            });
+        var controller = BuildController(store);
+
+        var result = (ContentResult)controller.Home();
+
+        Assert.DoesNotContain("</script>\"", result.Content!);
+        Assert.Contains("\\u003C", result.Content!);
+    }
+
+    private static void assertPickerOutsideForm(string html)
+    {
+        var pickerIndex = html.IndexOf("id=\"dialin-event\"", StringComparison.Ordinal);
+        var formIndex = html.IndexOf("<form id=\"dialin-form\">", StringComparison.Ordinal);
+        Assert.True(pickerIndex >= 0 && formIndex >= 0);
+        Assert.True(pickerIndex < formIndex, "Event picker must be rendered before (outside) the dial-in form.");
+    }
+
     private static PublicLiveController BuildController(ILiveRaceStateStore store, IDialInStore? dialInStore = null)
     {
         var controller = new PublicLiveController(store, dialInStore ?? new StubDialInStore());
@@ -252,20 +412,53 @@ public sealed class PublicLiveControllerTests
         return controller;
     }
 
+    private static Dictionary<string, LiveRaceState> ClassesWith(string eventName, params (int Id, string Name)[] drivers)
+    {
+        var matches = new List<LiveMatch>();
+        for (int i = 0; i < drivers.Length; i += 2)
+        {
+            matches.Add(new LiveMatch
+            {
+                RoundLabel = "R1",
+                LeftDriverId = drivers[i].Id,
+                LeftDriver = drivers[i].Name,
+                RightDriverId = i + 1 < drivers.Length ? drivers[i + 1].Id : 0,
+                RightDriver = i + 1 < drivers.Length ? drivers[i + 1].Name : string.Empty
+            });
+        }
+
+        return new Dictionary<string, LiveRaceState>
+        {
+            ["2.5"] = new()
+            {
+                EventId = "session-guid",
+                EventName = eventName,
+                EventDate = "2026-05-07",
+                ClassType = "2.5",
+                RaceType = "Dial-In",
+                CurrentRound = "R1",
+                Matches = matches
+            }
+        };
+    }
+
     private sealed class StubStateStore : ILiveRaceStateStore
     {
         private readonly IReadOnlyList<EventSummary> _events;
         private readonly Dictionary<string, LiveRaceState>? _classes;
         private readonly string? _resolvedEventKey;
+        private readonly Dictionary<string, Dictionary<string, LiveRaceState>>? _classesByEvent;
 
         public StubStateStore(
             IReadOnlyList<EventSummary> events,
             Dictionary<string, LiveRaceState>? classes = null,
-            string? resolvedEventKey = null)
+            string? resolvedEventKey = null,
+            Dictionary<string, Dictionary<string, LiveRaceState>>? classesByEvent = null)
         {
             _events = events;
             _classes = classes;
             _resolvedEventKey = resolvedEventKey;
+            _classesByEvent = classesByEvent;
         }
 
         public IReadOnlyList<EventSummary> GetActiveEvents() => _events;
@@ -273,7 +466,15 @@ public sealed class PublicLiveControllerTests
         public Dictionary<string, LiveRaceState> GetAll() => new();
         public void Upsert(LiveRaceState state) { }
         public void ClearEvent(string eventId, string? eventName) { }
-        public Dictionary<string, LiveRaceState>? GetEvent(string eventId) => _classes;
+
+        public Dictionary<string, LiveRaceState>? GetEvent(string eventId)
+        {
+            if (_classesByEvent is not null)
+                return _classesByEvent.TryGetValue(eventId, out var byEvent) ? byEvent : null;
+
+            return _classes;
+        }
+
         public string ResolveEventKey(string eventId) => _resolvedEventKey ?? eventId;
         public bool EventHasDriver(string eventId, int driverId) => true;
     }

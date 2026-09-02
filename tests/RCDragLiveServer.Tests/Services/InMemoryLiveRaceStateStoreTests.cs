@@ -39,7 +39,7 @@ public sealed class InMemoryLiveRaceStateStoreTests
             ClassType = "2.5",
             Matches = [new LiveMatch()]
         });
-        Assert.True(dialIns.SubmitUpdate("Saturday Shootout", 7, 3.250, null).success);
+        Assert.True(dialIns.SubmitUpdate("Saturday Shootout", 7, 3.250, "1234").success);
 
         store.Upsert(new LiveRaceState
         {
@@ -66,7 +66,7 @@ public sealed class InMemoryLiveRaceStateStoreTests
             ClassType = "2.5",
             Matches = [new LiveMatch()]
         });
-        Assert.True(dialIns.SubmitUpdate("Saturday Shootout", 7, 3.250, null).success);
+        Assert.True(dialIns.SubmitUpdate("Saturday Shootout", 7, 3.250, "1234").success);
 
         store.ClearEvent(sessionId.ToString("D"), eventName: null);
 

@@ -74,9 +74,13 @@ public sealed class DriverDialInController(
             !double.IsInfinity(dialIn.Value);
     }
 
+    // The PIN is what stops one driver editing another's dial-in, so it is
+    // required rather than optional -- otherwise any caller could claim an
+    // unclaimed driver id straight past the web form.
     private static bool IsValidPin(string? pin)
     {
-        return string.IsNullOrEmpty(pin) ||
-            (pin.Length == 4 && pin.All(char.IsDigit));
+        return pin is not null &&
+            pin.Length == 4 &&
+            pin.All(char.IsDigit);
     }
 }

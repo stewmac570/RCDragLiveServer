@@ -44,7 +44,8 @@ public sealed class DriverDialInControllerTests
         {
             EventId = "session-guid",
             DriverId = 12,
-            DialIn = 3.25
+            DialIn = 3.25,
+            Pin = "1234"
         });
 
         Assert.IsType<OkObjectResult>(result);
@@ -53,8 +54,13 @@ public sealed class DriverDialInControllerTests
         Assert.Equal(3.25, dialInStore.LastDialIn);
     }
 
-    [Fact]
-    public void Post_InvalidPinFormat_ReturnsBadRequestWithoutRateLimitOrStoreWrite()
+    [Theory]
+    [InlineData("abcd")]
+    [InlineData("123")]
+    [InlineData("12345")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void Post_InvalidPinFormat_ReturnsBadRequestWithoutRateLimitOrStoreWrite(string? pin)
     {
         var dialInStore = new RecordingDialInStore();
         var rateLimiter = new RecordingRateLimiter();
@@ -65,7 +71,7 @@ public sealed class DriverDialInControllerTests
             EventId = "evt1",
             DriverId = 12,
             DialIn = 3.25,
-            Pin = "abcd"
+            Pin = pin
         });
 
         Assert.IsType<BadRequestObjectResult>(result);
@@ -87,7 +93,8 @@ public sealed class DriverDialInControllerTests
         {
             EventId = "session-guid",
             DriverId = 12,
-            DialIn = 3.25
+            DialIn = 3.25,
+            Pin = "1234"
         });
 
         var objectResult = Assert.IsType<ObjectResult>(result);
@@ -110,7 +117,8 @@ public sealed class DriverDialInControllerTests
         {
             EventId = "session-guid",
             DriverId = 99,
-            DialIn = 3.25
+            DialIn = 3.25,
+            Pin = "1234"
         });
 
         Assert.IsType<BadRequestObjectResult>(result);
