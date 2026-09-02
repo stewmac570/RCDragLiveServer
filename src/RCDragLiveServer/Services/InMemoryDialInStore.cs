@@ -40,15 +40,15 @@ public sealed class InMemoryDialInStore : IDialInStore
         if (!IsValidDialIn(dialIn))
             return (false, "invalid_dialin");
 
-        // Validate format and hash before acquiring the lock so BCrypt work
-        // doesn't block other callers longer than necessary.
-        string? newHash = null;
-        if (!string.IsNullOrEmpty(pin))
-        {
-            if (pin.Length != 4 || !pin.All(char.IsDigit))
-                return (false, "invalid_pin_format");
-            newHash = BCrypt.Net.BCrypt.HashPassword(pin);
-        }
+        // A PIN is mandatory: the first submission claims the driver id, and every
+        // later change has to match it. Without one there is nothing separating
+        // one driver's entry from anybody else's.
+        if (string.IsNullOrEmpty(pin) || pin.Length != 4 || !pin.All(char.IsDigit))
+            return (false, "invalid_pin_format");
+
+        // Hash before acquiring the lock so BCrypt work doesn't block other
+        // callers longer than necessary.
+        var newHash = BCrypt.Net.BCrypt.HashPassword(pin);
 
         lock (_sync)
         {
@@ -59,10 +59,10 @@ public sealed class InMemoryDialInStore : IDialInStore
 
             if (data.Pins.TryGetValue(driverId, out var existingHash))
             {
-                if (string.IsNullOrEmpty(pin) || !BCrypt.Net.BCrypt.Verify(pin, existingHash))
+                if (!BCrypt.Net.BCrypt.Verify(pin, existingHash))
                     return (false, "invalid_pin");
             }
-            else if (newHash is not null)
+            else
             {
                 data.Pins[driverId] = newHash;
             }

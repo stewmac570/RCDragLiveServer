@@ -31,22 +31,33 @@ public sealed class InMemoryDialInStoreTests
         Assert.Null(correctError);
     }
 
-    [Fact]
-    public void SubmitUpdate_InvalidPinFormat_Rejected()
+    [Theory]
+    [InlineData("abc")]
+    [InlineData("123")]
+    [InlineData("12345")]
+    [InlineData("12a4")]
+    public void SubmitUpdate_InvalidPinFormat_Rejected(string pin)
     {
         var store = new InMemoryDialInStore();
-        var (success, error) = store.SubmitUpdate("evt1", 1, 1.0, "abc");
+        var (success, error) = store.SubmitUpdate("evt1", 1, 1.0, pin);
         Assert.False(success);
         Assert.Equal("invalid_pin_format", error);
     }
 
-    [Fact]
-    public void SubmitUpdate_NoPinRequired_WhenNoneSet()
+    // A PIN is what ties a dial-in to one driver, so an unclaimed driver id can no
+    // longer be written without one.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void SubmitUpdate_MissingPin_Rejected(string? pin)
     {
         var store = new InMemoryDialInStore();
-        var (success, error) = store.SubmitUpdate("evt1", 1, 1.0, null);
-        Assert.True(success);
-        Assert.Null(error);
+
+        var (success, error) = store.SubmitUpdate("evt1", 1, 1.0, pin);
+
+        Assert.False(success);
+        Assert.Equal("invalid_pin_format", error);
+        Assert.Empty(store.GetAll("evt1"));
     }
 
     [Fact]
@@ -57,7 +68,8 @@ public sealed class InMemoryDialInStoreTests
 
         var (success, error) = store.SubmitUpdate("evt1", 1, 2.0, null);
         Assert.False(success);
-        Assert.Equal("invalid_pin", error);
+        Assert.Equal("invalid_pin_format", error);
+        Assert.Equal(1.0, store.GetAll("evt1")[1]);
     }
 
     [Theory]
@@ -70,7 +82,7 @@ public sealed class InMemoryDialInStoreTests
     {
         var store = new InMemoryDialInStore();
 
-        var (success, error) = store.SubmitUpdate("evt1", 1, dialIn, null);
+        var (success, error) = store.SubmitUpdate("evt1", 1, dialIn, "1234");
 
         Assert.False(success);
         Assert.Equal("invalid_dialin", error);
@@ -81,9 +93,9 @@ public sealed class InMemoryDialInStoreTests
     public void SubmitUpdate_InvalidDialIn_DoesNotOverwriteExistingValue()
     {
         var store = new InMemoryDialInStore();
-        store.SubmitUpdate("evt1", 1, 1.5, null);
+        store.SubmitUpdate("evt1", 1, 1.5, "1234");
 
-        var (success, error) = store.SubmitUpdate("evt1", 1, null, null);
+        var (success, error) = store.SubmitUpdate("evt1", 1, null, "1234");
 
         Assert.False(success);
         Assert.Equal("invalid_dialin", error);
