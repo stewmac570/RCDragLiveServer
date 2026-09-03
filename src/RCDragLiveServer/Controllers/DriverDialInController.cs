@@ -33,9 +33,6 @@ public sealed class DriverDialInController(
         if (!stateStore.EventHasDriver(eventKey, request.DriverId))
             return BadRequest(new { error = "invalid_driver" });
 
-        if (dialInStore.IsLocked(eventKey))
-            return StatusCode(423, new { error = "locked" });
-
         if (!rateLimiter.TryAcquire(eventKey, request.DriverId))
             return StatusCode(StatusCodes.Status429TooManyRequests, new { error = "rate_limited" });
 
@@ -45,7 +42,6 @@ public sealed class DriverDialInController(
         {
             return error switch
             {
-                "locked"             => StatusCode(423, new { error = "locked" }),
                 "invalid_pin"        => Unauthorized(new { error = "invalid_pin" }),
                 "invalid_pin_format" => BadRequest(new { error = "invalid_pin_format" }),
                 "invalid_dialin"     => BadRequest(new { error = "invalid_dialin" }),
@@ -53,7 +49,44 @@ public sealed class DriverDialInController(
             };
         }
 
-        return Ok(new { status = "updated" });
+        // Saved regardless. "pending" tells the driver their time lands in the next
+        // round rather than the one already generated.
+        return Ok(new { status = "updated", pending = dialInStore.IsLocked(eventKey) });
+    }
+
+    [HttpPost("login")]
+    [EnableRateLimiting("dialin-per-ip")]
+    public IActionResult Login([FromBody] DriverDialInRequest request)
+    {
+        if (request is null || request.DriverId <= 0)
+            return BadRequest(new { error = "invalid_payload" });
+
+        if (string.IsNullOrWhiteSpace(request.EventId))
+            return BadRequest(new { error = "invalid_event" });
+
+        if (!IsValidPin(request.Pin))
+            return BadRequest(new { error = "invalid_pin_format" });
+
+        var eventKey = stateStore.ResolveEventKey(request.EventId);
+        if (!stateStore.EventHasDriver(eventKey, request.DriverId))
+            return BadRequest(new { error = "invalid_driver" });
+
+        var (ok, error) = dialInStore.VerifyPin(eventKey, request.DriverId, request.Pin);
+        if (!ok)
+        {
+            return error == "invalid_pin"
+                ? Unauthorized(new { error = "invalid_pin" })
+                : BadRequest(new { error });
+        }
+
+        dialInStore.GetAll(eventKey).TryGetValue(request.DriverId, out var currentDialIn);
+
+        return Ok(new
+        {
+            status = "ok",
+            dialIn = currentDialIn,
+            pending = dialInStore.IsLocked(eventKey)
+        });
     }
 
     [HttpGet]

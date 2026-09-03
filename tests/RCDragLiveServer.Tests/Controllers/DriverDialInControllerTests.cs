@@ -80,7 +80,7 @@ public sealed class DriverDialInControllerTests
     }
 
     [Fact]
-    public void Post_LockedEvent_ReturnsLockedWithoutRateLimitOrStoreWrite()
+    public void Post_LockedEvent_StillSavesAndReportsPending()
     {
         var dialInStore = new RecordingDialInStore(lockedEventId: "resolved-event");
         var rateLimiter = new RecordingRateLimiter();
@@ -97,10 +97,11 @@ public sealed class DriverDialInControllerTests
             Pin = "1234"
         });
 
-        var objectResult = Assert.IsType<ObjectResult>(result);
-        Assert.Equal(423, objectResult.StatusCode);
-        Assert.Equal(0, rateLimiter.CallCount);
-        Assert.Equal(0, dialInStore.SubmitCount);
+        // A generated round must not block the driver: the time is stored either
+        // way, and the response flags that it lands in the next race.
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal(1, rateLimiter.CallCount);
+        Assert.Equal(1, dialInStore.SubmitCount);
     }
 
     [Fact]
@@ -136,6 +137,8 @@ public sealed class DriverDialInControllerTests
         public string? LastEventId { get; private set; }
         public int LastDriverId { get; private set; }
         public double? LastDialIn { get; private set; }
+
+        public (bool success, string? error) VerifyPin(string eventId, int driverId, string? pin) => (true, null);
 
         public (bool success, string? error) SubmitUpdate(string eventId, int driverId, double? dialIn, string? pin)
         {

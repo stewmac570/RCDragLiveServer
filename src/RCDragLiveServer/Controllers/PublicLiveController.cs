@@ -112,13 +112,28 @@ public sealed class PublicLiveController : ControllerBase
         IEnumerable<LiveRaceState> classes,
         IReadOnlyDictionary<int, double?> submittedDialIns)
     {
-        return classes
+        var classList = classes.ToList();
+
+        // The class entry list is the only source of names before a round is
+        // generated -- Matches is empty until then. Matches still contribute so a
+        // driver who somehow only appears in a bracket is never dropped.
+        var fromEntries = classList
+            .SelectMany(s => s.Drivers)
+            .Select(d => (
+                Id: d.DriverId,
+                Name: d.DriverName,
+                DialIn: EffectiveDialIn(d.DriverId, d.DialIn, submittedDialIns)));
+
+        var fromMatches = classList
             .SelectMany(s => s.Matches)
             .SelectMany(m => new[]
             {
                 (Id: m.LeftDriverId,  Name: string.IsNullOrEmpty(m.LeftDriver)  ? m.Driver1 : m.LeftDriver, DialIn: EffectiveDialIn(m.LeftDriverId, m.LeftDriverDialIn, submittedDialIns)),
                 (Id: m.RightDriverId, Name: string.IsNullOrEmpty(m.RightDriver) ? m.Driver2 : m.RightDriver, DialIn: EffectiveDialIn(m.RightDriverId, m.RightDriverDialIn, submittedDialIns))
-            })
+            });
+
+        return fromEntries
+            .Concat(fromMatches)
             .Where(p => p.Id > 0 && !string.IsNullOrWhiteSpace(p.Name) && !string.Equals(p.Name, "BYE", StringComparison.OrdinalIgnoreCase))
             .GroupBy(p => p.Id)
             .Select(g =>
@@ -169,7 +184,20 @@ public sealed class PublicLiveController : ControllerBase
             content.Append(BuildClassPanel(classes[sortedKeys[0]], submittedDialIns));
         }
 
-        content.Append(BuildDialInForm(allDrivers, dialInLocked, eventId));
+        content.Append(BuildDialInForm(allDrivers, dialInLocked));
+
+        var pagePayload = new List<DialInEventPayload>
+        {
+            new DialInEventPayload
+            {
+                EventKey = eventId,
+                EventName = eventId,
+                Locked = dialInLocked,
+                Drivers = allDrivers
+                    .Select(d => new DialInDriverPayload { Id = d.Id, Name = d.Name, DialIn = FormatDialIn(d.DialIn) })
+                    .ToList()
+            }
+        };
 
         var css = """
         * { box-sizing: border-box; }
@@ -219,7 +247,13 @@ public sealed class PublicLiveController : ControllerBase
         .dialin-form button:disabled { background:#334155; color:#64748b; cursor:not-allowed; }
         .dialin-status { margin-top:10px; font-size:14px; font-weight:600; min-height:20px; text-align:center; }
         .dialin-status.ok { color:#4ade80; } .dialin-status.err { color:#f87171; } .dialin-status.info { color:#94a3b8; font-style:italic; }
-        .dialin-locked-notice { background:#451a03; border:1px solid #92400e; border-radius:12px; color:#fcd34d; font-size:14px; font-weight:600; padding:12px 16px; text-align:center; }
+        .dialin-notice { background:#451a03; border:1px solid #92400e; border-radius:12px; color:#fcd34d; font-size:13px; font-weight:600; padding:10px 14px; text-align:center; margin-bottom:12px; }
+        .dialin-who { font-size:16px; font-weight:800; color:#f8fafc; margin-bottom:2px; }
+        .dialin-current { font-size:13px; color:#94a3b8; margin-bottom:14px; }
+        .dialin-current strong { color:#7dd3fc; font-family:'Courier New',Courier,monospace; font-size:15px; }
+        .dialin-logout { margin-top:10px; background:transparent !important; border:1px solid #475569 !important; color:#94a3b8 !important; font-size:13px !important; font-weight:600 !important; padding:7px !important; }
+        .dialin-logout:hover { border-color:#64748b !important; color:#e2e8f0 !important; }
+        [hidden] { display:none !important; }
         .footer { margin-top:20px; text-align:center; color:#475569; font-size:12px; }
         @media(min-width:640px) { .match-list { grid-template-columns:1fr 1fr; } }
         @media(max-width:520px) { .dialin-form .form-row { grid-template-columns:1fr; gap:0; } }
@@ -262,7 +296,11 @@ public sealed class PublicLiveController : ControllerBase
                 try { sessionStorage.removeItem(DIALIN_KEY); } catch (e) {}
             }
 
+            // Set once a driver logs in; keeps the 5s refresh from signing them out.
+            var dialInSession = null;
+
             function isDialInFocused() {
+                if (dialInSession) return true;
                 var f = document.activeElement;
                 return f && (f.id === 'dialin-name' || f.id === 'dialin-value' || f.id === 'dialin-pin');
             }
@@ -307,93 +345,153 @@ public sealed class PublicLiveController : ControllerBase
 
             setTimeout(scheduleReload, 5000);
 
-            var form = document.getElementById('dialin-form');
-            if (form) {
-                restoreDialInState();
-                var nameSelect = document.getElementById('dialin-name');
-                var dialInInput = document.getElementById('dialin-value');
-                var pinInput = document.getElementById('dialin-pin');
-                var submitBtn = document.getElementById('dialin-submit');
-                var statusEl = document.getElementById('dialin-status');
-                function selectedDialIn() {
-                    if (!nameSelect || nameSelect.selectedIndex < 0) return '';
-                    return nameSelect.options[nameSelect.selectedIndex].getAttribute('data-dialin') || '';
+            var loginForm  = document.getElementById('dialin-login');
+            var nameSelect = document.getElementById('dialin-name');
+            var pinInput   = document.getElementById('dialin-pin');
+            var panel      = document.getElementById('dialin-panel');
+            var whoEl      = document.getElementById('dialin-who');
+            var currentEl  = document.getElementById('dialin-current');
+            var saveForm   = document.getElementById('dialin-form');
+            var valueInput = document.getElementById('dialin-value');
+            var saveBtn    = document.getElementById('dialin-submit');
+            var logoutBtn  = document.getElementById('dialin-logout');
+            var statusEl   = document.getElementById('dialin-status');
+            var noticeEl   = document.getElementById('dialin-notice');
+
+            if (loginForm) {
+                var raceEvent = DIALIN_EVENTS[0];
+
+                var showStatus = function (msg, cls) {
+                    statusEl.textContent = msg;
+                    statusEl.className = 'dialin-status ' + (cls || '');
+                };
+
+                var roundMessage = function () {
+                    return 'A round has already been generated \u2014 your time will not take effect until the next race.';
+                };
+
+                if (raceEvent.locked) {
+                    noticeEl.hidden = false;
+                    noticeEl.textContent = roundMessage();
                 }
-                nameSelect.addEventListener('change', function () {
-                    var current = selectedDialIn();
-                    if (current) {
-                        dialInInput.value = current;
-                        showStatus('Current dial-in loaded: ' + current + 's', 'info');
-                    } else if (!dialInInput.value) {
-                        showStatus('', '');
-                    }
+
+                var blank = document.createElement('option');
+                blank.value = '';
+                blank.textContent = '\u2014 select your name \u2014';
+                nameSelect.appendChild(blank);
+                raceEvent.drivers.forEach(function (d) {
+                    var opt = document.createElement('option');
+                    opt.value = String(d.id);
+                    opt.setAttribute('data-name', d.name);
+                    opt.setAttribute('data-dialin', d.dialIn || '');
+                    opt.textContent = d.dialIn ? d.name + ' (' + d.dialIn + 's)' : d.name;
+                    nameSelect.appendChild(opt);
                 });
-                form.addEventListener('submit', function (e) {
-                    e.preventDefault();
-                    var driverId = nameSelect ? parseInt(nameSelect.value, 10) : 0;
-                    var val = parseFloat(dialInInput.value);
-                    var pin = pinInput.value.trim();
-                    if (!driverId || driverId <= 0) { showStatus('Please select your name.', 'err'); return; }
-                    if (isNaN(val) || val <= 0) { showStatus('Enter a valid dial-in time (e.g. 3.250).', 'err'); return; }
-                    if (!/^[0-9]{4}$/.test(pin)) { showStatus('Enter your 4-digit PIN.', 'err'); return; }
-                    submitBtn.disabled = true;
-                    showStatus('Saving…', 'info');
-                    fetch('/api/dialin', {
+
+                var describeCurrent = function (dialIn) {
+                    currentEl.innerHTML = dialIn
+                        ? 'Your dial-in: <strong>' + dialIn + 's</strong>'
+                        : 'You have not set a dial-in yet.';
+                };
+
+                var post = function (url, body) {
+                    return fetch(url, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ eventId: PAGE_EVENT_ID, driverId: driverId, dialIn: val, pin: pin })
-                    })
-                    .then(function (r) {
+                        body: JSON.stringify(body)
+                    }).then(function (r) {
                         return r.text().then(function (text) {
-                            var body = {};
-                            if (text) {
-                                try { body = JSON.parse(text); } catch (e) {}
-                            }
-                            return { ok: r.ok, status: r.status, body: body };
+                            var parsed = {};
+                            if (text) { try { parsed = JSON.parse(text); } catch (e) {} }
+                            return { ok: r.ok, status: r.status, body: parsed };
                         });
-                    })
-                    .then(function (res) {
-                        submitBtn.disabled = false;
-                        if (res.ok) {
-                            var saved = val.toFixed(3);
-                            clearDialInState();
-                            pinInput.value = '';
-                            updateVisibleDialIn(driverId, saved);
-                            showStatus('Dial-in saved: ' + saved + 's', 'ok');
-                        }
-                        else if (res.status === 423) { showStatus('Round in progress — dial-in locked.', 'err'); }
-                        else if (res.status === 429) { showStatus('Too many updates — wait a few seconds.', 'err'); }
-                        else if (res.body && res.body.error === 'invalid_pin') { showStatus('Incorrect PIN.', 'err'); }
-                        else if (res.body && res.body.error === 'invalid_pin_format') { showStatus('PIN must be exactly 4 digits.', 'err'); }
-                        else if (res.body && res.body.error === 'invalid_driver') { showStatus('Driver is no longer active in this event.', 'err'); }
-                        else if (res.body && res.body.error === 'invalid_dialin') { showStatus('Enter a valid dial-in time (e.g. 3.250).', 'err'); }
-                        else { showStatus('Error saving dial-in.', 'err'); }
-                    })
-                    .catch(function () { submitBtn.disabled = false; showStatus('Network error — try again.', 'err'); });
-                });
-                function updateVisibleDialIn(driverId, saved) {
-                    var option = nameSelect.options[nameSelect.selectedIndex];
-                    if (option) {
-                        var name = option.getAttribute('data-name') || option.textContent.replace(/\s+\([0-9.]+s\)$/, '');
-                        option.setAttribute('data-name', name);
-                        option.setAttribute('data-dialin', saved);
-                        option.textContent = name + ' (' + saved + 's)';
-                    }
-                    document.querySelectorAll('[data-driver-id="' + driverId + '"]').forEach(function (driverEl) {
-                        var badge = driverEl.querySelector('.dial-in-badge');
+                    });
+                };
+
+                var describeError = function (res, fallback) {
+                    if (res.status === 429) return 'Too many attempts \u2014 wait a few seconds.';
+                    if (res.body && res.body.error === 'invalid_pin') return 'Incorrect PIN.';
+                    if (res.body && res.body.error === 'invalid_pin_format') return 'PIN must be exactly 4 digits.';
+                    if (res.body && res.body.error === 'invalid_driver') return 'You are no longer entered in this event.';
+                    if (res.body && res.body.error === 'invalid_dialin') return 'Enter a valid dial-in time (e.g. 3.250).';
+                    return fallback;
+                };
+
+                var updateBadges = function (driverId, saved) {
+                    document.querySelectorAll('[data-driver-id="' + driverId + '"]').forEach(function (el) {
+                        var badge = el.querySelector('.dial-in-badge');
                         if (!badge) {
                             badge = document.createElement('span');
                             badge.className = 'dial-in-badge';
-                            driverEl.appendChild(badge);
+                            el.appendChild(badge);
                         }
                         badge.textContent = saved + 's';
                     });
-                }
-                function showStatus(msg, cls) { statusEl.textContent = msg; statusEl.className = 'dialin-status ' + cls; }
-                if (nameSelect.value && !dialInInput.value) {
-                    var current = selectedDialIn();
-                    if (current) dialInInput.value = current;
-                }
+                };
+
+                loginForm.addEventListener('submit', function (e) {
+                    e.preventDefault();
+                    var driverId = parseInt(nameSelect.value, 10);
+                    var pin = pinInput.value.trim();
+                    var option = nameSelect.options[nameSelect.selectedIndex];
+                    var name = option ? (option.getAttribute('data-name') || option.textContent) : '';
+                    if (!driverId || driverId <= 0) { showStatus('Please select your name.', 'err'); return; }
+                    if (!/^[0-9]{4}$/.test(pin)) { showStatus('Enter your 4-digit PIN.', 'err'); return; }
+
+                    showStatus('Checking\u2026', 'info');
+                    post('/api/dialin/login', { eventId: PAGE_EVENT_ID, driverId: driverId, pin: pin })
+                        .then(function (res) {
+                            if (!res.ok) { showStatus(describeError(res, 'Could not log in.'), 'err'); return; }
+                            var dialIn = (res.body.dialIn === null || res.body.dialIn === undefined)
+                                ? (option ? option.getAttribute('data-dialin') : '')
+                                : Number(res.body.dialIn).toFixed(3);
+                            dialInSession = { driverId: driverId, pin: pin };
+                            whoEl.textContent = 'Signed in as ' + name;
+                            describeCurrent(dialIn);
+                            valueInput.value = dialIn || '';
+                            loginForm.hidden = true;
+                            panel.hidden = false;
+                            pinInput.value = '';
+                            showStatus('', '');
+                            valueInput.focus();
+                        })
+                        .catch(function () { showStatus('Network error \u2014 try again.', 'err'); });
+                });
+
+                saveForm.addEventListener('submit', function (e) {
+                    e.preventDefault();
+                    if (!dialInSession) return;
+                    var val = parseFloat(valueInput.value);
+                    if (isNaN(val) || val <= 0) { showStatus('Enter a valid dial-in time (e.g. 3.250).', 'err'); return; }
+                    saveBtn.disabled = true;
+                    showStatus('Saving\u2026', 'info');
+                    post('/api/dialin', {
+                        eventId: PAGE_EVENT_ID,
+                        driverId: dialInSession.driverId,
+                        dialIn: val,
+                        pin: dialInSession.pin
+                    })
+                        .then(function (res) {
+                            saveBtn.disabled = false;
+                            if (!res.ok) { showStatus(describeError(res, 'Error saving dial-in.'), 'err'); return; }
+                            var saved = val.toFixed(3);
+                            describeCurrent(saved);
+                            updateBadges(dialInSession.driverId, saved);
+                            showStatus(res.body.pending
+                                ? 'Saved: ' + saved + 's. ' + roundMessage()
+                                : 'Dial-in saved: ' + saved + 's', res.body.pending ? 'info' : 'ok');
+                        })
+                        .catch(function () { saveBtn.disabled = false; showStatus('Network error \u2014 try again.', 'err'); });
+                });
+
+                logoutBtn.addEventListener('click', function () {
+                    dialInSession = null;
+                    panel.hidden = true;
+                    loginForm.hidden = false;
+                    pinInput.value = '';
+                    valueInput.value = '';
+                    showStatus('', '');
+                });
             }
         })();
 """;
@@ -412,7 +510,10 @@ public sealed class PublicLiveController : ControllerBase
             content.ToString() +
             "        <div class=\"footer\">Auto-refreshes every 5 seconds</div>\n" +
             "    </div>\n" +
-            "    <script>\n" + $"var PAGE_EVENT_ID = {JavaScriptString(eventId)};\n" + script + "    </script>\n" +
+            "    <script>\n" +
+            $"var PAGE_EVENT_ID = {JavaScriptString(eventId)};\n" +
+            $"var DIALIN_EVENTS = {JsonSerializer.Serialize(pagePayload, DialInPayloadJsonOptions)};\n" +
+            script + "    </script>\n" +
             "</body>\n</html>\n";
     }
 
@@ -483,7 +584,12 @@ public sealed class PublicLiveController : ControllerBase
         .dialin-form button:disabled { background:#334155; color:#64748b; cursor:not-allowed; }
         .dialin-status { margin-top:10px; font-size:14px; font-weight:600; min-height:20px; text-align:center; }
         .dialin-status.ok { color:#4ade80; } .dialin-status.err { color:#f87171; } .dialin-status.info { color:#94a3b8; font-style:italic; }
-        .dialin-locked-notice { background:#451a03; border:1px solid #92400e; border-radius:12px; color:#fcd34d; font-size:14px; font-weight:600; padding:12px 16px; text-align:center; }
+        .dialin-notice { background:#451a03; border:1px solid #92400e; border-radius:12px; color:#fcd34d; font-size:13px; font-weight:600; padding:10px 14px; text-align:center; margin-bottom:12px; }
+        .dialin-who { font-size:16px; font-weight:800; color:#f8fafc; margin-bottom:2px; }
+        .dialin-current { font-size:13px; color:#94a3b8; margin-bottom:14px; }
+        .dialin-current strong { color:#7dd3fc; font-family:'Courier New',Courier,monospace; font-size:15px; }
+        .dialin-logout { margin-top:10px; background:transparent !important; border:1px solid #475569 !important; color:#94a3b8 !important; font-size:13px !important; font-weight:600 !important; padding:7px !important; }
+        .dialin-logout:hover { border-color:#64748b !important; color:#e2e8f0 !important; }
         .footer { margin-top:28px; text-align:center; color:#475569; font-size:12px; }
         [hidden] { display:none !important; }
         @media(max-width:520px) { .dialin-form .form-row { grid-template-columns:1fr; gap:0; } }
@@ -492,75 +598,34 @@ public sealed class PublicLiveController : ControllerBase
         var script = """
         (function () {
             var RELOAD_MS = 5000;
-            var STATE_KEY = 'rcDialInLanding';
-            // A driver who starts typing and then wanders off shouldn't block the
-            // scoreboard refresh forever, so a dirty form only defers this long.
-            var MAX_DEFER_MS = 120000;
-            var deferredSince = 0;
 
-            var form = document.getElementById('dialin-form');
             var eventSelect = document.getElementById('dialin-event');
-            var nameSelect = document.getElementById('dialin-name');
-            var dialInInput = document.getElementById('dialin-value');
-            var pinInput = document.getElementById('dialin-pin');
-            var submitBtn = document.getElementById('dialin-submit');
-            var statusEl = document.getElementById('dialin-status');
-            var lockedEl = document.getElementById('dialin-locked');
-            var dirty = false;
+            var loginForm   = document.getElementById('dialin-login');
+            var nameSelect  = document.getElementById('dialin-name');
+            var pinInput    = document.getElementById('dialin-pin');
+            var panel       = document.getElementById('dialin-panel');
+            var whoEl       = document.getElementById('dialin-who');
+            var currentEl   = document.getElementById('dialin-current');
+            var saveForm    = document.getElementById('dialin-form');
+            var valueInput  = document.getElementById('dialin-value');
+            var saveBtn     = document.getElementById('dialin-submit');
+            var logoutBtn   = document.getElementById('dialin-logout');
+            var statusEl    = document.getElementById('dialin-status');
+            var noticeEl    = document.getElementById('dialin-notice');
 
-            function isBusy() {
-                if (!form) return false;
-                var focused = document.activeElement;
-                if (focused && (form.contains(focused) || focused === eventSelect)) return true;
-                if (!dirty) return false;
-                if (!deferredSince) deferredSince = Date.now();
-                return (Date.now() - deferredSince) < MAX_DEFER_MS;
-            }
+            // Held in memory only, never written to storage. While a driver is
+            // logged in the page stops auto-refreshing, so the session survives
+            // without a PIN ever being persisted.
+            var session = null;
 
             function scheduleReload() {
                 setTimeout(function () {
-                    if (isBusy()) { scheduleReload(); return; }
-                    saveState();
+                    if (session) { scheduleReload(); return; }
                     location.reload();
                 }, RELOAD_MS);
             }
 
-            // Keyed by event key, never by picker index: the event list is ordered by
-            // last update, so a given index can point at a different event on the very
-            // next refresh. The PIN is deliberately never persisted.
-            function saveState() {
-                if (!form) return;
-                try {
-                    var ev = currentEvent();
-                    sessionStorage.setItem(STATE_KEY, JSON.stringify({
-                        evKey: ev ? ev.eventKey : '',
-                        driverId: nameSelect ? nameSelect.value : '',
-                        val: dialInInput ? dialInInput.value : '',
-                        ts: Date.now()
-                    }));
-                } catch (e) {}
-            }
-
-            function clearState() {
-                try { sessionStorage.removeItem(STATE_KEY); } catch (e) {}
-            }
-
-            // A draft only exists to survive the refresh timer. An older one is a
-            // leftover that would show a time the driver has already replaced.
-            function readState() {
-                try {
-                    var raw = sessionStorage.getItem(STATE_KEY);
-                    if (!raw) return null;
-                    var parsed = JSON.parse(raw);
-                    if (!parsed || !parsed.ts || (Date.now() - parsed.ts) > MAX_DEFER_MS) {
-                        clearState();
-                        return null;
-                    }
-                    return parsed;
-                } catch (e) { return null; }
-            }
-
-            if (!form || !DIALIN_EVENTS.length) { scheduleReload(); return; }
+            if (!loginForm || !DIALIN_EVENTS.length) { scheduleReload(); return; }
 
             function currentEvent() {
                 var index = eventSelect ? parseInt(eventSelect.value, 10) : 0;
@@ -570,21 +635,25 @@ public sealed class PublicLiveController : ControllerBase
 
             function showStatus(msg, cls) {
                 statusEl.textContent = msg;
-                statusEl.className = 'dialin-status ' + cls;
+                statusEl.className = 'dialin-status ' + (cls || '');
             }
 
-            function applyLock(ev) {
-                var locked = !!(ev && ev.locked);
-                lockedEl.hidden = !locked;
-                form.hidden = locked;
+            function roundMessage() {
+                return 'A round has already been generated \u2014 your time will not take effect until the next race.';
             }
 
-            function populateDrivers(preferredId) {
+            function refreshNotice() {
+                var ev = currentEvent();
+                noticeEl.hidden = !(ev && ev.locked);
+                if (ev && ev.locked) noticeEl.textContent = roundMessage();
+            }
+
+            function populateDrivers() {
                 var ev = currentEvent();
                 nameSelect.innerHTML = '';
                 var blank = document.createElement('option');
                 blank.value = '';
-                blank.textContent = '— select your name —';
+                blank.textContent = '\u2014 select your name \u2014';
                 nameSelect.appendChild(blank);
                 ev.drivers.forEach(function (d) {
                     var opt = document.createElement('option');
@@ -594,101 +663,122 @@ public sealed class PublicLiveController : ControllerBase
                     opt.textContent = d.dialIn ? d.name + ' (' + d.dialIn + 's)' : d.name;
                     nameSelect.appendChild(opt);
                 });
-                if (preferredId) nameSelect.value = String(preferredId);
-                if (nameSelect.selectedIndex < 0) nameSelect.selectedIndex = 0;
-                applyLock(ev);
+                refreshNotice();
             }
 
-            function selectedDialIn() {
-                if (nameSelect.selectedIndex < 0) return '';
-                return nameSelect.options[nameSelect.selectedIndex].getAttribute('data-dialin') || '';
+            function describeCurrent(dialIn) {
+                currentEl.innerHTML = dialIn
+                    ? 'Your dial-in: <strong>' + dialIn + 's</strong>'
+                    : 'You have not set a dial-in yet.';
             }
 
-            var saved = readState();
-            if (saved && saved.evKey && eventSelect) {
-                for (var i = 0; i < DIALIN_EVENTS.length; i++) {
-                    if (DIALIN_EVENTS[i].eventKey === saved.evKey) { eventSelect.value = String(i); break; }
-                }
-            }
-            populateDrivers(saved ? saved.driverId : '');
-            if (saved && saved.val) {
-                dialInInput.value = saved.val;
-                dirty = true;
-            } else {
-                dialInInput.value = selectedDialIn();
+            function enterSession(ev, driverId, name, pin, dialIn) {
+                session = { eventKey: ev.eventKey, driverId: driverId, pin: pin };
+                whoEl.textContent = 'Signed in as ' + name;
+                describeCurrent(dialIn);
+                valueInput.value = dialIn || '';
+                loginForm.hidden = true;
+                if (eventSelect) eventSelect.disabled = true;
+                panel.hidden = false;
+                pinInput.value = '';
+                valueInput.focus();
             }
 
-            form.addEventListener('input', function () { dirty = true; });
+            function leaveSession() {
+                session = null;
+                panel.hidden = true;
+                loginForm.hidden = false;
+                if (eventSelect) eventSelect.disabled = false;
+                pinInput.value = '';
+                valueInput.value = '';
+                showStatus('', '');
+                scheduleReload();
+            }
+
+            function post(url, body) {
+                return fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                }).then(function (r) {
+                    return r.text().then(function (text) {
+                        var parsed = {};
+                        if (text) { try { parsed = JSON.parse(text); } catch (e) {} }
+                        return { ok: r.ok, status: r.status, body: parsed };
+                    });
+                });
+            }
+
+            function describeError(res, fallback) {
+                if (res.status === 429) return 'Too many attempts \u2014 wait a few seconds.';
+                if (res.body && res.body.error === 'invalid_pin') return 'Incorrect PIN.';
+                if (res.body && res.body.error === 'invalid_pin_format') return 'PIN must be exactly 4 digits.';
+                if (res.body && res.body.error === 'invalid_driver') return 'You are no longer entered in this event.';
+                if (res.body && res.body.error === 'invalid_dialin') return 'Enter a valid dial-in time (e.g. 3.250).';
+                return fallback;
+            }
+
+            populateDrivers();
 
             if (eventSelect) {
                 eventSelect.addEventListener('change', function () {
-                    dirty = true;
-                    populateDrivers('');
-                    dialInInput.value = '';
+                    populateDrivers();
                     showStatus('', '');
                 });
             }
 
-            nameSelect.addEventListener('change', function () {
-                var current = selectedDialIn();
-                dialInInput.value = current;
-                showStatus(current ? 'Current dial-in loaded: ' + current + 's' : '', current ? 'info' : '');
-            });
-
-            form.addEventListener('submit', function (e) {
+            loginForm.addEventListener('submit', function (e) {
                 e.preventDefault();
                 var ev = currentEvent();
                 var driverId = parseInt(nameSelect.value, 10);
-                var val = parseFloat(dialInInput.value);
                 var pin = pinInput.value.trim();
+                var option = nameSelect.options[nameSelect.selectedIndex];
+                var name = option ? (option.getAttribute('data-name') || option.textContent) : '';
                 if (!driverId || driverId <= 0) { showStatus('Please select your name.', 'err'); return; }
-                if (isNaN(val) || val <= 0) { showStatus('Enter a valid dial-in time (e.g. 3.250).', 'err'); return; }
                 if (!/^[0-9]{4}$/.test(pin)) { showStatus('Enter your 4-digit PIN.', 'err'); return; }
-                submitBtn.disabled = true;
-                showStatus('Saving…', 'info');
-                fetch('/api/dialin', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ eventId: ev.eventKey, driverId: driverId, dialIn: val, pin: pin })
-                })
-                .then(function (r) {
-                    return r.text().then(function (text) {
-                        var body = {};
-                        if (text) { try { body = JSON.parse(text); } catch (err) {} }
-                        return { ok: r.ok, status: r.status, body: body };
-                    });
-                })
-                .then(function (res) {
-                    submitBtn.disabled = false;
-                    if (res.ok) {
-                        var savedValue = val.toFixed(3);
-                        dirty = false;
-                        deferredSince = 0;
-                        clearState();
-                        pinInput.value = '';
-                        updateRoster(ev, driverId, savedValue);
-                        showStatus('Dial-in saved: ' + savedValue + 's', 'ok');
-                    }
-                    else if (res.status === 423) { showStatus('Round in progress — dial-in locked.', 'err'); }
-                    else if (res.status === 429) { showStatus('Too many updates — wait a few seconds.', 'err'); }
-                    else if (res.body && res.body.error === 'invalid_pin') { showStatus('Incorrect PIN.', 'err'); }
-                    else if (res.body && res.body.error === 'invalid_pin_format') { showStatus('PIN must be exactly 4 digits.', 'err'); }
-                    else if (res.body && res.body.error === 'invalid_driver') { showStatus('Driver is no longer active in this event.', 'err'); }
-                    else if (res.body && res.body.error === 'invalid_dialin') { showStatus('Enter a valid dial-in time (e.g. 3.250).', 'err'); }
-                    else { showStatus('Error saving dial-in.', 'err'); }
-                })
-                .catch(function () { submitBtn.disabled = false; showStatus('Network error — try again.', 'err'); });
+
+                showStatus('Checking\u2026', 'info');
+                post('/api/dialin/login', { eventId: ev.eventKey, driverId: driverId, pin: pin })
+                    .then(function (res) {
+                        if (!res.ok) { showStatus(describeError(res, 'Could not log in.'), 'err'); return; }
+                        var dialIn = (res.body.dialIn === null || res.body.dialIn === undefined)
+                            ? (option ? option.getAttribute('data-dialin') : '')
+                            : Number(res.body.dialIn).toFixed(3);
+                        enterSession(ev, driverId, name, pin, dialIn);
+                        showStatus('', '');
+                    })
+                    .catch(function () { showStatus('Network error \u2014 try again.', 'err'); });
             });
 
-            function updateRoster(ev, driverId, savedValue) {
-                ev.drivers.forEach(function (d) { if (d.id === driverId) d.dialIn = savedValue; });
-                var option = nameSelect.options[nameSelect.selectedIndex];
-                if (option) {
-                    var name = option.getAttribute('data-name') || option.textContent;
-                    option.setAttribute('data-dialin', savedValue);
-                    option.textContent = name + ' (' + savedValue + 's)';
-                }
-            }
+            saveForm.addEventListener('submit', function (e) {
+                e.preventDefault();
+                if (!session) return;
+                var val = parseFloat(valueInput.value);
+                if (isNaN(val) || val <= 0) { showStatus('Enter a valid dial-in time (e.g. 3.250).', 'err'); return; }
+                saveBtn.disabled = true;
+                showStatus('Saving\u2026', 'info');
+                post('/api/dialin', {
+                    eventId: session.eventKey,
+                    driverId: session.driverId,
+                    dialIn: val,
+                    pin: session.pin
+                })
+                    .then(function (res) {
+                        saveBtn.disabled = false;
+                        if (!res.ok) { showStatus(describeError(res, 'Error saving dial-in.'), 'err'); return; }
+                        var saved = val.toFixed(3);
+                        describeCurrent(saved);
+                        currentEvent().drivers.forEach(function (d) {
+                            if (d.id === session.driverId) d.dialIn = saved;
+                        });
+                        showStatus(res.body.pending
+                            ? 'Saved: ' + saved + 's. ' + roundMessage()
+                            : 'Dial-in saved: ' + saved + 's', res.body.pending ? 'info' : 'ok');
+                    })
+                    .catch(function () { saveBtn.disabled = false; showStatus('Network error \u2014 try again.', 'err'); });
+            });
+
+            logoutBtn.addEventListener('click', leaveSession);
 
             scheduleReload();
         })();
@@ -716,12 +806,11 @@ public sealed class PublicLiveController : ControllerBase
         var sb = new StringBuilder();
         sb.AppendLine("  <h2 class=\"section-title\">Your Dial-In</h2>");
         sb.AppendLine("  <div class=\"dialin-form\">");
-        sb.AppendLine("    <h3>Set Your Dial-In</h3>");
-        sb.AppendLine("    <p class=\"dialin-help\">Pick your name, enter your dial-in, and choose a 4-digit PIN. The PIN is set the first time you save and is required to change your time after that. You can also update it from your event page.</p>");
-        // The picker sits outside the form on purpose: a locked event hides the form,
-        // and a driver still has to be able to switch to an event that is open.
-        // With a single active event it is noise, but it stays in the DOM so the
-        // script has one code path for both cases.
+        sb.AppendLine("    <h3>Driver Login</h3>");
+        sb.AppendLine("    <p class=\"dialin-help\">Pick your name and enter a 4-digit PIN. Your PIN is set the first time you log in and is needed to change your time later.</p>");
+
+        // The picker sits outside the login form so it stays usable while the
+        // driver is signed in to a different event.
         sb.AppendLine(dialInEvents.Count > 1 ? "    <div>" : "    <div hidden>");
         sb.AppendLine("      <label for=\"dialin-event\">Event</label>");
         sb.AppendLine("      <select id=\"dialin-event\">");
@@ -732,23 +821,28 @@ public sealed class PublicLiveController : ControllerBase
         sb.AppendLine("      </select>");
         sb.AppendLine("    </div>");
 
-        sb.AppendLine("    <form id=\"dialin-form\">");
+        sb.AppendLine("    <div class=\"dialin-notice\" id=\"dialin-notice\" hidden></div>");
+
+        sb.AppendLine("    <form id=\"dialin-login\">");
         sb.AppendLine("      <label for=\"dialin-name\">Your Name</label>");
         sb.AppendLine("      <select id=\"dialin-name\" required></select>");
-        sb.AppendLine("      <div class=\"form-row\">");
-        sb.AppendLine("        <div>");
-        sb.AppendLine("          <label for=\"dialin-value\">Dial-In (seconds)</label>");
-        sb.AppendLine("          <input type=\"number\" id=\"dialin-value\" step=\"0.001\" min=\"0.001\" inputmode=\"decimal\" autocomplete=\"off\" required placeholder=\"e.g. 3.250\" />");
-        sb.AppendLine("        </div>");
-        sb.AppendLine("        <div>");
-        sb.AppendLine("          <label for=\"dialin-pin\">PIN (4 digits)</label>");
-        sb.AppendLine("          <input type=\"password\" id=\"dialin-pin\" maxlength=\"4\" inputmode=\"numeric\" pattern=\"[0-9]{4}\" autocomplete=\"off\" required placeholder=\"4-digit PIN\" />");
-        sb.AppendLine("        </div>");
-        sb.AppendLine("      </div>");
-        sb.AppendLine("      <button id=\"dialin-submit\" type=\"submit\">Save Dial-In</button>");
-        sb.AppendLine("      <div class=\"dialin-status\" id=\"dialin-status\" role=\"status\" aria-live=\"polite\"></div>");
+        sb.AppendLine("      <label for=\"dialin-pin\">PIN (4 digits)</label>");
+        sb.AppendLine("      <input type=\"password\" id=\"dialin-pin\" maxlength=\"4\" inputmode=\"numeric\" pattern=\"[0-9]{4}\" autocomplete=\"off\" required placeholder=\"4-digit PIN\" />");
+        sb.AppendLine("      <button id=\"dialin-login-submit\" type=\"submit\">Log in</button>");
         sb.AppendLine("    </form>");
-        sb.AppendLine("    <div class=\"dialin-locked-notice\" id=\"dialin-locked\" hidden>Round in progress &mdash; dial-in updates are locked until the next round.</div>");
+
+        sb.AppendLine("    <div id=\"dialin-panel\" hidden>");
+        sb.AppendLine("      <div class=\"dialin-who\" id=\"dialin-who\"></div>");
+        sb.AppendLine("      <div class=\"dialin-current\" id=\"dialin-current\"></div>");
+        sb.AppendLine("      <form id=\"dialin-form\">");
+        sb.AppendLine("        <label for=\"dialin-value\">Dial-In (seconds)</label>");
+        sb.AppendLine("        <input type=\"number\" id=\"dialin-value\" step=\"0.001\" min=\"0.001\" inputmode=\"decimal\" autocomplete=\"off\" required placeholder=\"e.g. 3.250\" />");
+        sb.AppendLine("        <button id=\"dialin-submit\" type=\"submit\">Save Dial-In</button>");
+        sb.AppendLine("      </form>");
+        sb.AppendLine("      <button class=\"dialin-logout\" id=\"dialin-logout\" type=\"button\">Log out</button>");
+        sb.AppendLine("    </div>");
+
+        sb.AppendLine("    <div class=\"dialin-status\" id=\"dialin-status\" role=\"status\" aria-live=\"polite\"></div>");
         sb.AppendLine("  </div>");
 
         return sb.ToString();
@@ -926,50 +1020,38 @@ public sealed class PublicLiveController : ControllerBase
             rrHtml + "\n";
     }
 
-    private static string BuildDialInForm(List<(int Id, string Name, double? DialIn)> drivers, bool locked, string eventId)
+    private static string BuildDialInForm(List<(int Id, string Name, double? DialIn)> drivers, bool locked)
     {
         if (drivers.Count == 0) return string.Empty;
 
-        if (locked)
-        {
-            return
-                "        <!-- Dial-In (Locked) -->\n" +
-                "        <h2 class=\"section-title\">Your Dial-In</h2>\n" +
-                "        <div class=\"dialin-locked-notice\">\n" +
-                "            Round in progress &mdash; dial-in updates are locked until the next round.\n" +
-                "        </div>\n";
-        }
-
-        StringBuilder options = new StringBuilder();
-        options.AppendLine("                <option value=\"\">&#8212; select your name &#8212;</option>");
-        foreach (var (id, name, dialIn) in drivers)
-        {
-            string dialInValue = FormatDialIn(dialIn);
-            string label = dialIn.HasValue ? $"{name} ({dialInValue}s)" : name;
-            options.AppendLine($"                <option value=\"{id}\" data-name=\"{Html(name)}\" data-dialin=\"{Html(dialInValue)}\">{Html(label)}</option>");
-        }
-
+        // A generated round no longer hides this form. The driver can always save;
+        // the notice tells them it lands in the next race.
         return
-            "        <!-- Dial-In Update Form -->\n" +
+            "        <!-- Dial-In -->\n" +
             "        <h2 class=\"section-title\">Your Dial-In</h2>\n" +
-            "        <form class=\"dialin-form\" id=\"dialin-form\">\n" +
-            "            <h3>Set Your Dial-In</h3>\n" +
-            "            <p class=\"dialin-help\">Pick your name, confirm the time, then save with your 4-digit PIN. The PIN is set the first time you save and is required to change your time after that. Existing dial-ins load automatically.</p>\n" +
-            "            <label for=\"dialin-name\">Your Name</label>\n" +
-            $"            <select id=\"dialin-name\" required>\n{options}            </select>\n" +
-            "            <div class=\"form-row\">\n" +
-            "                <div>\n" +
+            "        <div class=\"dialin-form\">\n" +
+            "            <h3>Driver Login</h3>\n" +
+            "            <p class=\"dialin-help\">Pick your name and enter a 4-digit PIN. Your PIN is set the first time you log in and is needed to change your time later.</p>\n" +
+            "            <div class=\"dialin-notice\" id=\"dialin-notice\" hidden></div>\n" +
+            "            <form id=\"dialin-login\">\n" +
+            "                <label for=\"dialin-name\">Your Name</label>\n" +
+            "                <select id=\"dialin-name\" required></select>\n" +
+            "                <label for=\"dialin-pin\">PIN (4 digits)</label>\n" +
+            "                <input type=\"password\" id=\"dialin-pin\" maxlength=\"4\" inputmode=\"numeric\" pattern=\"[0-9]{4}\" autocomplete=\"off\" required placeholder=\"4-digit PIN\" />\n" +
+            "                <button id=\"dialin-login-submit\" type=\"submit\">Log in</button>\n" +
+            "            </form>\n" +
+            "            <div id=\"dialin-panel\" hidden>\n" +
+            "                <div class=\"dialin-who\" id=\"dialin-who\"></div>\n" +
+            "                <div class=\"dialin-current\" id=\"dialin-current\"></div>\n" +
+            "                <form id=\"dialin-form\">\n" +
             "                    <label for=\"dialin-value\">Dial-In (seconds)</label>\n" +
             "                    <input type=\"number\" id=\"dialin-value\" step=\"0.001\" min=\"0.001\" inputmode=\"decimal\" autocomplete=\"off\" required placeholder=\"e.g. 3.250\" />\n" +
-            "                </div>\n" +
-            "                <div>\n" +
-            "                    <label for=\"dialin-pin\">PIN (4 digits)</label>\n" +
-            "                    <input type=\"password\" id=\"dialin-pin\" maxlength=\"4\" inputmode=\"numeric\" pattern=\"[0-9]{4}\" autocomplete=\"off\" required placeholder=\"4-digit PIN\" />\n" +
-            "                </div>\n" +
+            "                    <button id=\"dialin-submit\" type=\"submit\">Save Dial-In</button>\n" +
+            "                </form>\n" +
+            "                <button class=\"dialin-logout\" id=\"dialin-logout\" type=\"button\">Log out</button>\n" +
             "            </div>\n" +
-            "            <button id=\"dialin-submit\" type=\"submit\">Save Dial-In</button>\n" +
             "            <div class=\"dialin-status\" id=\"dialin-status\" role=\"status\" aria-live=\"polite\"></div>\n" +
-            "        </form>\n";
+            "        </div>\n";
     }
 
     private static int RoundSortKey(string label)
