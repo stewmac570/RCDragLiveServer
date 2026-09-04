@@ -104,25 +104,20 @@ public sealed class PublicLiveControllerTests
 
         var result = (ContentResult)controller.GetEventPage("Test Event");
 
-        Assert.Contains("<form class=\"dialin-form\" id=\"dialin-form\">", result.Content!);
-        Assert.Contains("Existing dial-ins load automatically.", result.Content!);
-        Assert.Contains("<select id=\"dialin-name\" required>", result.Content!);
-        Assert.Contains("<option value=\"12\" data-name=\"Stewart\" data-dialin=\"3.250\">Stewart (3.250s)</option>", result.Content!);
+        Assert.Contains("<form id=\"dialin-login\">", result.Content!);
+        Assert.Contains("<select id=\"dialin-name\" required></select>", result.Content!);
+        Assert.Contains("id=\"dialin-panel\"", result.Content!);
+        Assert.Contains("id=\"dialin-logout\"", result.Content!);
+        Assert.Contains("\"name\":\"Stewart\",\"dialIn\":\"3.250\"", result.Content!);
         Assert.Contains("data-driver-id=\"12\"", result.Content!);
         Assert.Contains("inputmode=\"decimal\"", result.Content!);
-        Assert.Contains("id=\"dialin-value\" step=\"0.001\" min=\"0.001\" inputmode=\"decimal\" autocomplete=\"off\" required", result.Content!);
         Assert.Contains("inputmode=\"numeric\"", result.Content!);
         Assert.Contains("pattern=\"[0-9]{4}\"", result.Content!);
         Assert.Contains("id=\"dialin-status\" role=\"status\" aria-live=\"polite\"", result.Content!);
-        Assert.Contains("return r.text().then", result.Content!);
-        Assert.Contains("Too many updates", result.Content!);
-        Assert.Contains("Driver is no longer active in this event.", result.Content!);
-        Assert.Contains("invalid_dialin", result.Content!);
-        Assert.Contains("var DIALIN_KEY = 'rcDialInForm:' + PAGE_EVENT_ID;", result.Content!);
-        Assert.Contains("updateVisibleDialIn(driverId, saved);", result.Content!);
-        Assert.Contains("document.querySelectorAll('[data-driver-id=\"' + driverId + '\"]')", result.Content!);
-        Assert.DoesNotContain("pin: pinEl", result.Content!);
-        Assert.DoesNotContain("s.pin", result.Content!);
+        Assert.Contains("/api/dialin/login", result.Content!);
+        Assert.Contains("Incorrect PIN.", result.Content!);
+        // The PIN lives in a closure variable only; it is never persisted.
+        Assert.DoesNotContain("sessionStorage.setItem(STATE_KEY", result.Content!);
     }
 
     [Fact]
@@ -198,8 +193,11 @@ public sealed class PublicLiveControllerTests
 
         var result = (ContentResult)controller.GetEventPage("session-guid");
 
-        Assert.Contains("dialin-locked-notice", result.Content!);
-        Assert.DoesNotContain("id=\"dialin-form\"", result.Content!);
+        // The driver can always save; only the notice changes.
+        Assert.Contains("id=\"dialin-notice\"", result.Content!);
+        Assert.Contains("id=\"dialin-login\"", result.Content!);
+        Assert.Contains("id=\"dialin-form\"", result.Content!);
+        Assert.Contains("\"locked\":true", result.Content!);
     }
 
     [Fact]
@@ -238,8 +236,8 @@ public sealed class PublicLiveControllerTests
         var result = (ContentResult)controller.GetEventPage("session-guid");
 
         Assert.Contains("<span class=\"dial-in-badge\">3.275s</span>", result.Content!);
-        Assert.Contains("<option value=\"12\" data-name=\"Stewart\" data-dialin=\"3.275\">Stewart (3.275s)</option>", result.Content!);
-        Assert.DoesNotContain("Stewart (3.100s)", result.Content!);
+        Assert.Contains("\"name\":\"Stewart\",\"dialIn\":\"3.275\"", result.Content!);
+        Assert.DoesNotContain("\"dialIn\":\"3.100\"", result.Content!);
     }
 
     // The landing page is where drivers actually arrive, so the dial-in form has to
@@ -297,7 +295,7 @@ public sealed class PublicLiveControllerTests
         var result = (ContentResult)controller.Home();
 
         Assert.Contains("\"locked\":true", result.Content!);
-        Assert.Contains("id=\"dialin-locked\"", result.Content!);
+        Assert.Contains("id=\"dialin-notice\"", result.Content!);
         // The picker must stay outside the form so a lock on one event cannot strand
         // a driver whose own event is still open.
         assertPickerOutsideForm(result.Content!);
@@ -397,7 +395,7 @@ public sealed class PublicLiveControllerTests
     private static void assertPickerOutsideForm(string html)
     {
         var pickerIndex = html.IndexOf("id=\"dialin-event\"", StringComparison.Ordinal);
-        var formIndex = html.IndexOf("<form id=\"dialin-form\">", StringComparison.Ordinal);
+        var formIndex = html.IndexOf("<form id=\"dialin-login\">", StringComparison.Ordinal);
         Assert.True(pickerIndex >= 0 && formIndex >= 0);
         Assert.True(pickerIndex < formIndex, "Event picker must be rendered before (outside) the dial-in form.");
     }
@@ -491,6 +489,7 @@ public sealed class PublicLiveControllerTests
         }
 
         public (bool success, string? error) SubmitUpdate(string eventId, int driverId, double? dialIn, string? pin) => (true, null);
+        public (bool success, string? error) VerifyPin(string eventId, int driverId, string? pin) => (true, null);
         public Dictionary<int, double?> GetAll(string eventId) => new(_dialIns);
         public void SetLocked(string eventId, bool locked) { }
         public bool IsLocked(string eventId) => string.Equals(eventId, _lockedEventId, StringComparison.OrdinalIgnoreCase);

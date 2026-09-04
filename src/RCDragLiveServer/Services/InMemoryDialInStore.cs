@@ -54,9 +54,6 @@ public sealed class InMemoryDialInStore : IDialInStore
         {
             var data = GetOrCreate(eventId);
 
-            if (data.Locked)
-                return (false, "locked");
-
             if (data.Pins.TryGetValue(driverId, out var existingHash))
             {
                 if (!BCrypt.Net.BCrypt.Verify(pin, existingHash))
@@ -70,6 +67,34 @@ public sealed class InMemoryDialInStore : IDialInStore
             data.DialIns[driverId] = dialIn;
             return (true, null);
         }
+    }
+
+    /// <summary>Checks a driver's PIN without writing a dial-in, so the page can
+    /// log someone in before they have a time to submit. An unclaimed driver id
+    /// accepts any well-formed PIN -- the first save is what claims it.</summary>
+    public (bool success, string? error) VerifyPin(string eventId, int driverId, string? pin)
+    {
+        if (string.IsNullOrWhiteSpace(eventId))
+            return (false, "invalid_event");
+        if (driverId <= 0)
+            return (false, "invalid_driver");
+        if (string.IsNullOrEmpty(pin) || pin.Length != 4 || !pin.All(char.IsDigit))
+            return (false, "invalid_pin_format");
+
+        string? existingHash;
+        lock (_sync)
+        {
+            if (!_events.TryGetValue(eventId, out var data) ||
+                !data.Pins.TryGetValue(driverId, out existingHash))
+            {
+                return (true, null);
+            }
+        }
+
+        // Verify outside the lock: BCrypt is deliberately slow.
+        return BCrypt.Net.BCrypt.Verify(pin, existingHash)
+            ? (true, null)
+            : (false, "invalid_pin");
     }
 
     private static bool IsValidDialIn(double? dialIn)

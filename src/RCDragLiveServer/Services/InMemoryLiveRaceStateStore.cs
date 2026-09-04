@@ -176,6 +176,12 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
             if (!_events.TryGetValue(ResolveEventKeyNoLock(eventId), out var bucket))
                 return false;
 
+            // The entry list counts as well as the bracket: before a round is
+            // generated there are no matches, and a driver must still be able to
+            // log in and set a time.
+            if (bucket.Classes.Values.SelectMany(state => state.Drivers).Any(d => d.DriverId == driverId))
+                return true;
+
             return bucket.Classes.Values
                 .SelectMany(state => state.Matches)
                 .Any(match => match.LeftDriverId == driverId || match.RightDriverId == driverId);
