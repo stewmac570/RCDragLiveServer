@@ -299,9 +299,23 @@ public sealed class PublicLiveController : ControllerBase
             // Set once a driver logs in; keeps the 5s refresh from signing them out.
             var dialInSession = null;
 
+            // Any touch inside the dial-in card also holds the refresh off, so the
+            // name picker does not get closed underneath the driver.
+            var dialInLastTouched = 0;
+            (function () {
+                var c = document.getElementById('dialin-card');
+                if (!c) return;
+                ['pointerdown', 'touchstart', 'focusin', 'input', 'change'].forEach(function (evt) {
+                    c.addEventListener(evt, function () { dialInLastTouched = Date.now(); }, true);
+                });
+            })();
+
             function isDialInFocused() {
                 if (dialInSession) return true;
+                if ((Date.now() - dialInLastTouched) < 60000) return true;
+                var card = document.getElementById('dialin-card');
                 var f = document.activeElement;
+                if (card && f && card.contains(f)) return true;
                 return f && (f.id === 'dialin-name' || f.id === 'dialin-value' || f.id === 'dialin-pin');
             }
 
@@ -618,9 +632,29 @@ public sealed class PublicLiveController : ControllerBase
             // without a PIN ever being persisted.
             var session = null;
 
+            // Reloading mid-interaction closes a native <select> picker on a phone
+            // and throws away a half-typed PIN, so the refresh backs off while the
+            // card is in use -- not only once someone is logged in.
+            var CARD_GRACE_MS = 60000;
+            var lastTouched = 0;
+            var card = document.getElementById('dialin-card');
+
+            function cardBusy() {
+                if (session) return true;
+                var focused = document.activeElement;
+                if (card && focused && card.contains(focused)) return true;
+                return (Date.now() - lastTouched) < CARD_GRACE_MS;
+            }
+
+            if (card) {
+                ['pointerdown', 'touchstart', 'focusin', 'input', 'change'].forEach(function (evt) {
+                    card.addEventListener(evt, function () { lastTouched = Date.now(); }, true);
+                });
+            }
+
             function scheduleReload() {
                 setTimeout(function () {
-                    if (session) { scheduleReload(); return; }
+                    if (cardBusy()) { scheduleReload(); return; }
                     location.reload();
                 }, RELOAD_MS);
             }
@@ -805,7 +839,7 @@ public sealed class PublicLiveController : ControllerBase
 
         var sb = new StringBuilder();
         sb.AppendLine("  <h2 class=\"section-title\">Your Dial-In</h2>");
-        sb.AppendLine("  <div class=\"dialin-form\">");
+        sb.AppendLine("  <div class=\"dialin-form\" id=\"dialin-card\">");
         sb.AppendLine("    <h3>Driver Login</h3>");
         sb.AppendLine("    <p class=\"dialin-help\">Pick your name and enter a 4-digit PIN. Your PIN is set the first time you log in and is needed to change your time later.</p>");
 
@@ -1029,7 +1063,7 @@ public sealed class PublicLiveController : ControllerBase
         return
             "        <!-- Dial-In -->\n" +
             "        <h2 class=\"section-title\">Your Dial-In</h2>\n" +
-            "        <div class=\"dialin-form\">\n" +
+            "        <div class=\"dialin-form\" id=\"dialin-card\">\n" +
             "            <h3>Driver Login</h3>\n" +
             "            <p class=\"dialin-help\">Pick your name and enter a 4-digit PIN. Your PIN is set the first time you log in and is needed to change your time later.</p>\n" +
             "            <div class=\"dialin-notice\" id=\"dialin-notice\" hidden></div>\n" +
