@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using RCDragLiveServer.Controllers;
 using RCDragLiveServer.Models;
 using RCDragLiveServer.Services;
+using RCDragLiveServer.Tests.Services;
 
 namespace RCDragLiveServer.Tests.Controllers;
 
@@ -402,7 +403,7 @@ public sealed class PublicLiveControllerTests
 
     private static PublicLiveController BuildController(ILiveRaceStateStore store, IDialInStore? dialInStore = null)
     {
-        var controller = new PublicLiveController(store, dialInStore ?? new StubDialInStore());
+        var controller = new PublicLiveController(store, dialInStore ?? new StubDialInStore(), new RecordingBroadcaster());
         controller.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext()

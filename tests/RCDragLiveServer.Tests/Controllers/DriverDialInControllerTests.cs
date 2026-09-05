@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using RCDragLiveServer.Controllers;
 using RCDragLiveServer.Models;
 using RCDragLiveServer.Services;
+using RCDragLiveServer.Tests.Services;
 
 namespace RCDragLiveServer.Tests.Controllers;
 
@@ -17,7 +18,7 @@ public sealed class DriverDialInControllerTests
     {
         var dialInStore = new RecordingDialInStore();
         var rateLimiter = new RecordingRateLimiter();
-        var controller = new DriverDialInController(dialInStore, rateLimiter, new PassThroughStateStore());
+        var controller = new DriverDialInController(dialInStore, rateLimiter, new PassThroughStateStore(), new RecordingBroadcaster());
 
         var result = controller.Post(new DriverDialInRequest
         {
@@ -38,7 +39,8 @@ public sealed class DriverDialInControllerTests
         var controller = new DriverDialInController(
             dialInStore,
             new RecordingRateLimiter(),
-            new FixedStateStore("resolved-event"));
+            new FixedStateStore("resolved-event"),
+            new RecordingBroadcaster());
 
         var result = controller.Post(new DriverDialInRequest
         {
@@ -64,7 +66,7 @@ public sealed class DriverDialInControllerTests
     {
         var dialInStore = new RecordingDialInStore();
         var rateLimiter = new RecordingRateLimiter();
-        var controller = new DriverDialInController(dialInStore, rateLimiter, new PassThroughStateStore());
+        var controller = new DriverDialInController(dialInStore, rateLimiter, new PassThroughStateStore(), new RecordingBroadcaster());
 
         var result = controller.Post(new DriverDialInRequest
         {
@@ -87,7 +89,8 @@ public sealed class DriverDialInControllerTests
         var controller = new DriverDialInController(
             dialInStore,
             rateLimiter,
-            new FixedStateStore("resolved-event"));
+            new FixedStateStore("resolved-event"),
+            new RecordingBroadcaster());
 
         var result = controller.Post(new DriverDialInRequest
         {
@@ -112,7 +115,8 @@ public sealed class DriverDialInControllerTests
         var controller = new DriverDialInController(
             dialInStore,
             rateLimiter,
-            new FixedStateStore("resolved-event", driverExists: false));
+            new FixedStateStore("resolved-event", driverExists: false),
+            new RecordingBroadcaster());
 
         var result = controller.Post(new DriverDialInRequest
         {

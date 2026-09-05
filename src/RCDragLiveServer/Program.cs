@@ -39,6 +39,7 @@ builder.Services.AddScoped<ApiKeyAuthorizationFilter>();
 builder.Services.AddSingleton<IDialInStore, InMemoryDialInStore>();
 builder.Services.AddSingleton<ILiveRaceStateStore, InMemoryLiveRaceStateStore>();
 builder.Services.AddSingleton<IDialInRateLimiter, InMemoryDialInRateLimiter>();
+builder.Services.AddSingleton<ILiveUpdateBroadcaster, InMemoryLiveUpdateBroadcaster>();
 
 // Render terminates TLS at a load balancer, so without this the only address
 // the app ever sees is the proxy's -- which would collapse the per-IP rate

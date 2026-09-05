@@ -11,7 +11,8 @@ namespace RCDragLiveServer.Controllers;
 public sealed class DriverDialInController(
     IDialInStore dialInStore,
     IDialInRateLimiter rateLimiter,
-    ILiveRaceStateStore stateStore) : ControllerBase
+    ILiveRaceStateStore stateStore,
+    ILiveUpdateBroadcaster broadcaster) : ControllerBase
 {
     [HttpPost]
     [EnableRateLimiting("dialin-per-ip")]
@@ -48,6 +49,10 @@ public sealed class DriverDialInController(
                 _                    => BadRequest(new { error })
             };
         }
+
+        // Everyone watching this event should see the new dial-in, not just the
+        // driver who entered it.
+        broadcaster.Publish(eventKey);
 
         // Saved regardless. "pending" tells the driver their time lands in the next
         // round rather than the one already generated.
