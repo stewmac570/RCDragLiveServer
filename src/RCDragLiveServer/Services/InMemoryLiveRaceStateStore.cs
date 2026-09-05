@@ -21,10 +21,12 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
     private readonly Dictionary<string, EventBucket> _events = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _eventAliases = new(StringComparer.OrdinalIgnoreCase);
     private readonly IDialInStore _dialInStore;
+    private readonly ILiveUpdateBroadcaster _broadcaster;
 
-    public InMemoryLiveRaceStateStore(IDialInStore dialInStore)
+    public InMemoryLiveRaceStateStore(IDialInStore dialInStore, ILiveUpdateBroadcaster broadcaster)
     {
         _dialInStore = dialInStore;
+        _broadcaster = broadcaster;
     }
 
     public LiveRaceState GetLatest()
@@ -68,6 +70,8 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
     {
         ArgumentNullException.ThrowIfNull(state);
 
+        string? publishKey = null;
+
         lock (_sync)
         {
             PurgeExpired();
@@ -103,6 +107,15 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
             string classKey = string.IsNullOrWhiteSpace(state.ClassType) ? "(Unknown)" : state.ClassType;
             bucket.Classes[classKey] = state;
             bucket.LastUpdated = DateTime.UtcNow;
+
+            publishKey = eventKey;
+        }
+
+        // Outside the lock: waking subscribers must not block the desktop's push.
+        if (publishKey is not null)
+        {
+            _broadcaster.Publish(publishKey);
+            _broadcaster.Publish(Controllers.PublicLiveController.LandingStreamKey);
         }
     }
 
@@ -116,6 +129,10 @@ public class InMemoryLiveRaceStateStore : ILiveRaceStateStore
             _dialInStore.ClearAll(eventKey);
             RemoveAliasesFor(eventKey);
         }
+
+        // Wake watchers so a finished event leaves their screen too.
+        _broadcaster.Publish(eventKey);
+        _broadcaster.Publish(Controllers.PublicLiveController.LandingStreamKey);
     }
 
     public IReadOnlyList<EventSummary> GetActiveEvents()

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using RCDragLiveServer.Models;
 using RCDragLiveServer.Services;
@@ -13,11 +14,16 @@ public sealed class PublicLiveController : ControllerBase
 {
     private readonly ILiveRaceStateStore stateStore;
     private readonly IDialInStore dialInStore;
+    private readonly ILiveUpdateBroadcaster broadcaster;
 
-    public PublicLiveController(ILiveRaceStateStore stateStore, IDialInStore dialInStore)
+    public PublicLiveController(
+        ILiveRaceStateStore stateStore,
+        IDialInStore dialInStore,
+        ILiveUpdateBroadcaster broadcaster)
     {
         this.stateStore = stateStore;
         this.dialInStore = dialInStore;
+        this.broadcaster = broadcaster;
     }
 
     [HttpGet("")]
@@ -54,6 +60,89 @@ public sealed class PublicLiveController : ControllerBase
         return Ok(stateStore.GetAll().Values.ToList());
     }
 
+    /// <summary>
+    /// Push channel for a page. Sends nothing but "something changed" -- the page
+    /// then re-reads the board itself. Verified to stream through Render's proxy
+    /// rather than being buffered (~0.3s end to end, 30 concurrent connections).
+    /// </summary>
+    [HttpGet("event/{eventId}/stream")]
+    public Task StreamEvent(string eventId, CancellationToken cancellationToken) =>
+        StreamChanges(stateStore.ResolveEventKey(eventId), cancellationToken);
+
+    /// <summary>Landing page stream. Keyed on the whole site rather than one event,
+    /// so a new event appearing wakes it too.</summary>
+    [HttpGet("stream")]
+    public Task StreamLanding(CancellationToken cancellationToken) =>
+        StreamChanges(LandingStreamKey, cancellationToken);
+
+    private async Task StreamChanges(string eventKey, CancellationToken cancellationToken)
+    {
+        Response.ContentType = "text/event-stream";
+        Response.Headers.CacheControl = "no-cache, no-store, max-age=0";
+        Response.Headers.Pragma = "no-cache";
+
+        // Tells an nginx-family reverse proxy not to buffer. Render sits behind one.
+        Response.Headers["X-Accel-Buffering"] = "no";
+
+        HttpContext.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
+
+        using var eventSubscription = broadcaster.Subscribe(eventKey);
+        using var landingSubscription = string.Equals(eventKey, LandingStreamKey, StringComparison.Ordinal)
+            ? null
+            : broadcaster.Subscribe(LandingStreamKey);
+
+        // Say hello immediately so the browser knows the channel is open and does
+        // not sit on its reconnect timer wondering.
+        await WriteSseAsync("ready", cancellationToken);
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var changed = await WaitForAnyAsync(eventSubscription, landingSubscription, cancellationToken);
+
+            if (cancellationToken.IsCancellationRequested)
+                break;
+
+            if (changed)
+            {
+                await WriteSseAsync("changed", cancellationToken);
+            }
+            else
+            {
+                // Heartbeat: an idle connection through a proxy gets reaped, and a
+                // race has long quiet stretches between winners.
+                await WriteCommentAsync(cancellationToken);
+            }
+        }
+    }
+
+    private static async Task<bool> WaitForAnyAsync(
+        ILiveUpdateSubscription first,
+        ILiveUpdateSubscription? second,
+        CancellationToken cancellationToken)
+    {
+        using var heartbeat = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        heartbeat.CancelAfter(HeartbeatInterval);
+
+        var waits = second is null
+            ? new[] { first.WaitForChangeAsync(heartbeat.Token) }
+            : new[] { first.WaitForChangeAsync(heartbeat.Token), second.WaitForChangeAsync(heartbeat.Token) };
+
+        var finished = await Task.WhenAny(waits);
+        return finished.Status == TaskStatus.RanToCompletion && finished.Result;
+    }
+
+    private async Task WriteSseAsync(string eventName, CancellationToken cancellationToken)
+    {
+        await Response.WriteAsync($"event: {eventName}\ndata: 1\n\n", cancellationToken);
+        await Response.Body.FlushAsync(cancellationToken);
+    }
+
+    private async Task WriteCommentAsync(CancellationToken cancellationToken)
+    {
+        await Response.WriteAsync(": keep-alive\n\n", cancellationToken);
+        await Response.Body.FlushAsync(cancellationToken);
+    }
+
     [HttpGet("health")]
     public IActionResult GetHealth()
     {
@@ -61,6 +150,12 @@ public sealed class PublicLiveController : ControllerBase
 
         return Ok(new { status = "healthy" });
     }
+
+    /// <summary>Every push also wakes the landing page, so a new or finished event
+    /// shows up there without its own subscription per event.</summary>
+    public const string LandingStreamKey = "(landing)";
+
+    private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(20);
 
     private void ApplyNoCacheHeaders()
     {
@@ -163,6 +258,8 @@ public sealed class PublicLiveController : ControllerBase
 
         StringBuilder content = new StringBuilder();
 
+        content.AppendLine("<div id=\"live-board\">");
+
         if (multiClass)
         {
             content.AppendLine("<div class=\"tab-bar\">");
@@ -183,6 +280,8 @@ public sealed class PublicLiveController : ControllerBase
         {
             content.Append(BuildClassPanel(classes[sortedKeys[0]], submittedDialIns));
         }
+
+        content.AppendLine("</div>");
 
         content.Append(BuildDialInForm(allDrivers, dialInLocked));
 
@@ -262,102 +361,165 @@ public sealed class PublicLiveController : ControllerBase
         var script = """
         (function () {
             var STORAGE_KEY = 'rcDragActiveClass';
-            var DIALIN_KEY = 'rcDialInForm:' + PAGE_EVENT_ID;
             var CYCLE_MS = 8000;
-            var buttons = Array.from(document.querySelectorAll('.tab-btn'));
-            var panels = Array.from(document.querySelectorAll('.tab-panel'));
-            var count = buttons.length;
+            var buttons = [];
+            var panels = [];
+            var count = 0;
             var cycleTimer = null;
 
-            function saveDialInState() {
-                try {
-                    var nameEl = document.getElementById('dialin-name');
-                    var valEl = document.getElementById('dialin-value');
-                    sessionStorage.setItem(DIALIN_KEY, JSON.stringify({
-                        name: nameEl ? nameEl.value : '',
-                        val: valEl ? valEl.value : ''
-                    }));
-                } catch (e) {}
-            }
-
-            function restoreDialInState() {
-                try {
-                    var raw = sessionStorage.getItem(DIALIN_KEY);
-                    if (!raw) return;
-                    var s = JSON.parse(raw);
-                    var nameEl = document.getElementById('dialin-name');
-                    var valEl = document.getElementById('dialin-value');
-                    if (nameEl && s.name) nameEl.value = s.name;
-                    if (valEl && s.val) valEl.value = s.val;
-                } catch (e) {}
-            }
-
-            function clearDialInState() {
-                try { sessionStorage.removeItem(DIALIN_KEY); } catch (e) {}
-            }
-
-            // Set once a driver logs in; keeps the 5s refresh from signing them out.
+            // Set once a driver logs in.
             var dialInSession = null;
 
-            // Any touch inside the dial-in card also holds the refresh off, so the
-            // name picker does not get closed underneath the driver.
-            var dialInLastTouched = 0;
-            (function () {
-                var c = document.getElementById('dialin-card');
-                if (!c) return;
-                ['pointerdown', 'touchstart', 'focusin', 'input', 'change'].forEach(function (evt) {
-                    c.addEventListener(evt, function () { dialInLastTouched = Date.now(); }, true);
+            function populateNames() {
+                nameSelect.innerHTML = '';
+                var blank = document.createElement('option');
+                blank.value = '';
+                blank.textContent = '\u2014 select your name \u2014';
+                nameSelect.appendChild(blank);
+                if (!raceEvent) return;
+                raceEvent.drivers.forEach(function (d) {
+                    var opt = document.createElement('option');
+                    opt.value = String(d.id);
+                    opt.setAttribute('data-name', d.name);
+                    opt.setAttribute('data-dialin', d.dialIn || '');
+                    opt.textContent = d.dialIn ? d.name + ' (' + d.dialIn + 's)' : d.name;
+                    nameSelect.appendChild(opt);
                 });
-            })();
-
-            function isDialInFocused() {
-                if (dialInSession) return true;
-                if ((Date.now() - dialInLastTouched) < 60000) return true;
-                var card = document.getElementById('dialin-card');
-                var f = document.activeElement;
-                if (card && f && card.contains(f)) return true;
-                return f && (f.id === 'dialin-name' || f.id === 'dialin-value' || f.id === 'dialin-pin');
             }
 
-            function scheduleReload() {
-                if (isDialInFocused()) { setTimeout(scheduleReload, 3000); return; }
-                saveDialInState();
-                location.reload();
+            // The page no longer reloads. The server pushes when something changes and
+            // only the board is swapped, so the bracket stays current while a driver
+            // is part-way through entering a dial-in.
+            var FALLBACK_MS = 30000;
+            var refreshing = false;
+            var fallbackTimer = null;
+
+            function applyUpdate(html) {
+                var doc = new DOMParser().parseFromString(html, 'text/html');
+
+                var freshBoard = doc.getElementById('live-board');
+                var board = document.getElementById('live-board');
+                if (freshBoard && board) {
+                    var activeLabel = null;
+                    var activeBtn = document.querySelector('.tab-btn.active');
+                    if (activeBtn) activeLabel = activeBtn.textContent.trim();
+
+                    board.innerHTML = freshBoard.innerHTML;
+                    rebindTabs(activeLabel);
+                }
+
+                var match = /var DIALIN_EVENTS = (\[.*?\]);/.exec(html);
+                if (match) {
+                    try { refreshRoster(JSON.parse(match[1])); } catch (e) {}
+                }
             }
 
-            if (count === 0) { setTimeout(scheduleReload, 5000); return; }
+            function refreshRoster(fresh) {
+                if (!fresh.length) return;
+                DIALIN_EVENTS.length = 0;
+                Array.prototype.push.apply(DIALIN_EVENTS, fresh);
+                raceEvent = DIALIN_EVENTS[0];
+
+                if (raceEvent.locked) {
+                    noticeEl.hidden = false;
+                    noticeEl.textContent = roundMessage();
+                } else {
+                    noticeEl.hidden = true;
+                }
+
+                if (!dialInSession) {
+                    var chosen = nameSelect.value;
+                    populateNames();
+                    if (chosen) nameSelect.value = chosen;
+                    return;
+                }
+
+                // Signed in: leave their typed time alone, and only intervene if the
+                // RD regenerated the bracket without them.
+                var stillEntered = raceEvent.drivers.some(function (d) { return d.id === dialInSession.driverId; });
+                if (!stillEntered) {
+                    dialInSession = null;
+                    panel.hidden = true;
+                    loginForm.hidden = false;
+                    pinInput.value = '';
+                    valueInput.value = '';
+                    populateNames();
+                    showStatus('The bracket changed and you are no longer in this event. Please log in again.', 'err');
+                }
+            }
+
+            function refreshBoard() {
+                if (refreshing) return;
+                refreshing = true;
+                fetch(location.href, { headers: { 'Accept': 'text/html' } })
+                    .then(function (r) { return r.text(); })
+                    .then(function (html) { applyUpdate(html); })
+                    .catch(function () {})
+                    .then(function () { refreshing = false; });
+            }
+
+            function startFallback() {
+                if (fallbackTimer) return;
+                fallbackTimer = setInterval(refreshBoard, FALLBACK_MS);
+            }
+
+            function connect() {
+                if (typeof EventSource === 'undefined') { startFallback(); return; }
+                try {
+                    var stream = new EventSource('/event/' + encodeURIComponent(PAGE_EVENT_ID) + '/stream');
+                    stream.addEventListener('changed', refreshBoard);
+                    stream.onerror = function () { startFallback(); };
+                } catch (e) {
+                    startFallback();
+                }
+            }
 
             function activate(index) {
                 buttons.forEach(function (b, i) { b.classList.toggle('active', i === index); });
                 panels.forEach(function (p, i) { p.classList.toggle('active', i === index); });
             }
+
             function startCycle(fromIndex) {
                 if (cycleTimer) clearInterval(cycleTimer);
+                if (count < 2) return;
                 var current = fromIndex;
                 cycleTimer = setInterval(function () { current = (current + 1) % count; activate(current); }, CYCLE_MS);
             }
 
-            var storedClass = null;
-            try { storedClass = localStorage.getItem(STORAGE_KEY); } catch (e) {}
-            var activeIndex = 0;
-            var userHasSelection = false;
-            if (storedClass) {
-                var found = -1;
-                buttons.forEach(function (btn, i) { if (btn.textContent.trim() === storedClass) { found = i; } });
-                if (found >= 0) { activeIndex = found; userHasSelection = true; }
-                else { try { localStorage.removeItem(STORAGE_KEY); } catch (e) {} }
-            }
-            activate(activeIndex);
-            if (!userHasSelection) startCycle(activeIndex);
-            buttons.forEach(function (btn, i) {
-                btn.addEventListener('click', function () {
-                    activate(i);
-                    try { localStorage.setItem(STORAGE_KEY, btn.textContent.trim()); } catch (e) {}
-                    if (cycleTimer) { clearInterval(cycleTimer); cycleTimer = null; }
-                });
-            });
+            // Re-read the tab elements after a board swap and restore the class the
+            // viewer was looking at, so a push does not yank them to another class.
+            function rebindTabs(preferredLabel) {
+                if (cycleTimer) { clearInterval(cycleTimer); cycleTimer = null; }
 
-            setTimeout(scheduleReload, 5000);
+                buttons = Array.from(document.querySelectorAll('.tab-btn'));
+                panels = Array.from(document.querySelectorAll('.tab-panel'));
+                count = buttons.length;
+                if (count === 0) return;
+
+                var stored = preferredLabel;
+                if (!stored) { try { stored = localStorage.getItem(STORAGE_KEY); } catch (e) {} }
+
+                var index = 0;
+                var pinned = false;
+                if (stored) {
+                    buttons.forEach(function (btn, i) {
+                        if (btn.textContent.trim() === stored) { index = i; pinned = true; }
+                    });
+                }
+
+                activate(index);
+                if (!pinned) startCycle(index);
+
+                buttons.forEach(function (btn, i) {
+                    btn.addEventListener('click', function () {
+                        activate(i);
+                        try { localStorage.setItem(STORAGE_KEY, btn.textContent.trim()); } catch (e) {}
+                        if (cycleTimer) { clearInterval(cycleTimer); cycleTimer = null; }
+                    });
+                });
+            }
+
+            rebindTabs(null);
 
             var loginForm  = document.getElementById('dialin-login');
             var nameSelect = document.getElementById('dialin-name');
@@ -372,9 +534,9 @@ public sealed class PublicLiveController : ControllerBase
             var statusEl   = document.getElementById('dialin-status');
             var noticeEl   = document.getElementById('dialin-notice');
 
-            if (loginForm) {
-                var raceEvent = DIALIN_EVENTS[0];
+            var raceEvent = DIALIN_EVENTS.length ? DIALIN_EVENTS[0] : null;
 
+            if (loginForm && raceEvent) {
                 var showStatus = function (msg, cls) {
                     statusEl.textContent = msg;
                     statusEl.className = 'dialin-status ' + (cls || '');
@@ -389,18 +551,7 @@ public sealed class PublicLiveController : ControllerBase
                     noticeEl.textContent = roundMessage();
                 }
 
-                var blank = document.createElement('option');
-                blank.value = '';
-                blank.textContent = '\u2014 select your name \u2014';
-                nameSelect.appendChild(blank);
-                raceEvent.drivers.forEach(function (d) {
-                    var opt = document.createElement('option');
-                    opt.value = String(d.id);
-                    opt.setAttribute('data-name', d.name);
-                    opt.setAttribute('data-dialin', d.dialIn || '');
-                    opt.textContent = d.dialIn ? d.name + ' (' + d.dialIn + 's)' : d.name;
-                    nameSelect.appendChild(opt);
-                });
+                populateNames();
 
                 var describeCurrent = function (dialIn) {
                     currentEl.innerHTML = dialIn
@@ -507,6 +658,8 @@ public sealed class PublicLiveController : ControllerBase
                     showStatus('', '');
                 });
             }
+
+            connect();
         })();
 """;
 
@@ -522,7 +675,7 @@ public sealed class PublicLiveController : ControllerBase
             "    </div>\n" +
             "    <div class=\"wrap\">\n\n" +
             content.ToString() +
-            "        <div class=\"footer\">Auto-refreshes every 5 seconds</div>\n" +
+            "        <div class=\"footer\">Updates live</div>\n" +
             "    </div>\n" +
             "    <script>\n" +
             $"var PAGE_EVENT_ID = {JavaScriptString(eventId)};\n" +
@@ -541,6 +694,8 @@ public sealed class PublicLiveController : ControllerBase
         sb.AppendLine("    <h1 class=\"brand-title\">Stew Mac RC</h1>");
         sb.AppendLine("    <p class=\"brand-subtitle\">Live Race Scoreboard</p>");
         sb.AppendLine("  </div>");
+
+        sb.AppendLine("  <div id=\"live-board\">");
 
         if (events.Count == 0)
         {
@@ -567,9 +722,11 @@ public sealed class PublicLiveController : ControllerBase
             sb.AppendLine("  </div>");
         }
 
+        sb.AppendLine("  </div>");
+
         sb.Append(BuildLandingDialInSection(dialInEvents));
 
-        sb.AppendLine("  <div class=\"footer\">Auto-refreshes every 5 seconds</div>");
+        sb.AppendLine("  <div class=\"footer\">Updates live</div>");
         sb.AppendLine("</div>");
 
         var css = """
@@ -611,8 +768,6 @@ public sealed class PublicLiveController : ControllerBase
 
         var script = """
         (function () {
-            var RELOAD_MS = 5000;
-
             var eventSelect = document.getElementById('dialin-event');
             var loginForm   = document.getElementById('dialin-login');
             var nameSelect  = document.getElementById('dialin-name');
@@ -632,34 +787,101 @@ public sealed class PublicLiveController : ControllerBase
             // without a PIN ever being persisted.
             var session = null;
 
-            // Reloading mid-interaction closes a native <select> picker on a phone
-            // and throws away a half-typed PIN, so the refresh backs off while the
-            // card is in use -- not only once someone is logged in.
-            var CARD_GRACE_MS = 60000;
-            var lastTouched = 0;
-            var card = document.getElementById('dialin-card');
+            // The page no longer reloads itself. The server pushes when something
+            // actually changes and only the board is swapped, so the scoreboard stays
+            // current without ever disturbing whoever is typing in the dial-in card.
+            var FALLBACK_MS = 30000;
+            var refreshing = false;
+            var fallbackTimer = null;
 
-            function cardBusy() {
-                if (session) return true;
-                var focused = document.activeElement;
-                if (card && focused && card.contains(focused)) return true;
-                return (Date.now() - lastTouched) < CARD_GRACE_MS;
+            function applyUpdate(html) {
+                var doc = new DOMParser().parseFromString(html, 'text/html');
+
+                var freshBoard = doc.getElementById('live-board');
+                var board = document.getElementById('live-board');
+                if (freshBoard && board) board.innerHTML = freshBoard.innerHTML;
+
+                var match = /var DIALIN_EVENTS = (\[.*?\]);/.exec(html);
+                if (match) {
+                    try { refreshRoster(JSON.parse(match[1])); } catch (e) {}
+                }
             }
 
-            if (card) {
-                ['pointerdown', 'touchstart', 'focusin', 'input', 'change'].forEach(function (evt) {
-                    card.addEventListener(evt, function () { lastTouched = Date.now(); }, true);
+            function refreshRoster(fresh) {
+                DIALIN_EVENTS.length = 0;
+                Array.prototype.push.apply(DIALIN_EVENTS, fresh);
+
+                if (!DIALIN_EVENTS.length) return;
+
+                if (!session) {
+                    // Safe to rebuild: nobody is part-way through anything.
+                    var chosen = nameSelect.value;
+                    rebuildEventOptions();
+                    populateDrivers();
+                    if (chosen) nameSelect.value = chosen;
+                    return;
+                }
+
+                // Signed in. Never touch their typed dial-in; only step in if they
+                // have actually gone from the event, which happens when the RD adds
+                // a driver and regenerates the bracket.
+                var ev = currentEvent();
+                var stillEntered = ev && ev.drivers.some(function (d) { return d.id === session.driverId; });
+                if (!stillEntered) {
+                    leaveSession();
+                    rebuildEventOptions();
+                    populateDrivers();
+                    showStatus('The bracket changed and you are no longer in this event. Please log in again.', 'err');
+                } else {
+                    refreshNotice();
+                }
+            }
+
+            function rebuildEventOptions() {
+                if (!eventSelect) return;
+                var chosen = eventSelect.value;
+                eventSelect.innerHTML = '';
+                DIALIN_EVENTS.forEach(function (ev, i) {
+                    var opt = document.createElement('option');
+                    opt.value = String(i);
+                    opt.textContent = ev.eventName;
+                    eventSelect.appendChild(opt);
                 });
+                if (chosen && parseInt(chosen, 10) < DIALIN_EVENTS.length) eventSelect.value = chosen;
             }
 
-            function scheduleReload() {
-                setTimeout(function () {
-                    if (cardBusy()) { scheduleReload(); return; }
-                    location.reload();
-                }, RELOAD_MS);
+            function refreshBoard() {
+                if (refreshing) return;
+                refreshing = true;
+                fetch(location.href, { headers: { 'Accept': 'text/html' } })
+                    .then(function (r) { return r.text(); })
+                    .then(function (html) { applyUpdate(html); })
+                    .catch(function () {})
+                    .then(function () { refreshing = false; });
             }
 
-            if (!loginForm || !DIALIN_EVENTS.length) { scheduleReload(); return; }
+            // Fallback for a browser or network where the stream never establishes.
+            function startFallback() {
+                if (fallbackTimer) return;
+                fallbackTimer = setInterval(refreshBoard, FALLBACK_MS);
+            }
+
+            function connect() {
+                if (typeof EventSource === 'undefined') { startFallback(); return; }
+                try {
+                    var stream = new EventSource('/stream');
+                    stream.addEventListener('changed', refreshBoard);
+                    stream.onerror = function () {
+                        // EventSource reconnects on its own; the fallback covers the
+                        // case where it never manages to.
+                        startFallback();
+                    };
+                } catch (e) {
+                    startFallback();
+                }
+            }
+
+            if (!loginForm || !DIALIN_EVENTS.length) { connect(); return; }
 
             function currentEvent() {
                 var index = eventSelect ? parseInt(eventSelect.value, 10) : 0;
@@ -726,7 +948,6 @@ public sealed class PublicLiveController : ControllerBase
                 pinInput.value = '';
                 valueInput.value = '';
                 showStatus('', '');
-                scheduleReload();
             }
 
             function post(url, body) {
@@ -814,7 +1035,7 @@ public sealed class PublicLiveController : ControllerBase
 
             logoutBtn.addEventListener('click', leaveSession);
 
-            scheduleReload();
+            connect();
         })();
 """;
 
@@ -922,7 +1143,7 @@ public sealed class PublicLiveController : ControllerBase
     <div class="no-event">
         <h1>No Active Event</h1>
         <p>Waiting for race data to arrive.</p>
-        <div class="footer">Auto-refreshes every 5 seconds</div>
+        <div class="footer">Updates live</div>
     </div>
     <script>
         setTimeout(function () { location.reload(); }, 5000);

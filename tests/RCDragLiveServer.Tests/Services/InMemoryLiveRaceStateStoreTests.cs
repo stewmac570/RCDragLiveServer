@@ -9,7 +9,7 @@ public sealed class InMemoryLiveRaceStateStoreTests
     public void ResolveEventKey_SessionGuidAliasesToEventNameBucket()
     {
         var dialIns = new InMemoryDialInStore();
-        var store = new InMemoryLiveRaceStateStore(dialIns);
+        var store = new InMemoryLiveRaceStateStore(dialIns, new RecordingBroadcaster());
         var sessionId = Guid.NewGuid();
 
         store.Upsert(new LiveRaceState
@@ -30,7 +30,7 @@ public sealed class InMemoryLiveRaceStateStoreTests
     public void Upsert_NewSessionForSameEventName_ClearsOldDialIns()
     {
         var dialIns = new InMemoryDialInStore();
-        var store = new InMemoryLiveRaceStateStore(dialIns);
+        var store = new InMemoryLiveRaceStateStore(dialIns, new RecordingBroadcaster());
 
         store.Upsert(new LiveRaceState
         {
@@ -56,7 +56,7 @@ public sealed class InMemoryLiveRaceStateStoreTests
     public void ClearEvent_ClearsDialInsForResolvedSessionGuid()
     {
         var dialIns = new InMemoryDialInStore();
-        var store = new InMemoryLiveRaceStateStore(dialIns);
+        var store = new InMemoryLiveRaceStateStore(dialIns, new RecordingBroadcaster());
         var sessionId = Guid.NewGuid();
 
         store.Upsert(new LiveRaceState
@@ -78,7 +78,7 @@ public sealed class InMemoryLiveRaceStateStoreTests
     public void EventHasDriver_UsesResolvedEventKeyAndCurrentMatches()
     {
         var dialIns = new InMemoryDialInStore();
-        var store = new InMemoryLiveRaceStateStore(dialIns);
+        var store = new InMemoryLiveRaceStateStore(dialIns, new RecordingBroadcaster());
         var sessionId = Guid.NewGuid();
 
         store.Upsert(new LiveRaceState
